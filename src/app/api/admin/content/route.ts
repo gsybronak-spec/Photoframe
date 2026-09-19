@@ -7,9 +7,10 @@ export async function GET() {
   const { error } = await requireAdmin();
   if (error) return error;
   try {
+    const catalog = await getCatalog();
     return ok({
-      settings: getSettings(),
-      featured: getCatalog()
+      settings: await getSettings(),
+      featured: catalog
         .filter((f) => f.featured && f.active)
         .map((f) => ({ slug: f.slug, title: f.title })),
     });
@@ -34,7 +35,7 @@ export async function PATCH(req: Request) {
   if (!body) return fail("Invalid request body", "BAD_REQUEST");
 
   try {
-    const settings = setSettings(
+    const settings = await setSettings(
       {
         hero_tagline:
           body.hero_tagline === undefined ? undefined : String(body.hero_tagline),
@@ -43,7 +44,7 @@ export async function PATCH(req: Request) {
       },
       admin.id
     );
-    logEvent(
+    await logEvent(
       admin.id,
       "admin_action",
       "Updated homepage content",

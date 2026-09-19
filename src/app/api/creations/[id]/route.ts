@@ -29,18 +29,19 @@ interface OwnedRow {
 }
 
 /** Loads a creation and enforces ownership in one place (no IDOR by design). */
-function loadOwned(
+async function loadOwned(
   id: string,
   viewerId: string,
   role: string
-): { row: OwnedRow; allowed: boolean } | null {
-  const row = getDb()
+): Promise<{ row: OwnedRow; allowed: boolean } | null> {
+  const db = await getDb();
+  const row = (await db
     .prepare(
       `SELECT id, user_id, frame_id, caption, storage_path, thumb_path,
               visibility, share_slug, share_show_caption
        FROM creations WHERE id = ?`
     )
-    .get(id) as OwnedRow | undefined;
+    .get(id)) as OwnedRow | undefined;
   if (!row) return null;
   return { row, allowed: row.user_id === viewerId || role === "admin" };
 }
@@ -60,17 +61,17 @@ export async function DELETE(
     const safeId = cleanId(id);
     if (!safeId) return fail("Creation not found.", "NOT_FOUND");
 
-    const found = loadOwned(safeId, user.id, user.role);
+    const found = await loadOwned(safeId, user.id, user.role);
     if (!found) return fail("Creation not found.", "NOT_FOUND");
     if (!found.allowed) {
       return fail("You can only delete your own creations.", "FORBIDDEN");
     }
 
-    const db = getDb();
-    db.prepare("DELETE FROM creations WHERE id = ?").run(safeId);
+    const db = await getDb();
+    await db.prepare("DELETE FROM creations WHERE id = ?").run(safeId);
     await deleteCreationObjects([found.row.storage_path, found.row.thumb_path]);
 
-    logEvent(user.id, "creation_deleted", "Deleted a creation", {
+    await logEvent(user.id, "creation_deleted", "Deleted a creation", {
       creationId: safeId,
       frame: found.row.frame_id,
     });
@@ -114,7 +115,7 @@ export async function PATCH(
     const safeId = cleanId(id);
     if (!safeId) return fail("Creation not found.", "NOT_FOUND");
 
-    const found = loadOwned(safeId, user.id, user.role);
+    const found = await loadOwned(safeId, user.id, user.role);
     if (!found) return fail("Creation not found.", "NOT_FOUND");
     // Sharing is always owner-only — an admin may delete, but never publish on
     // another person's behalf.
@@ -122,7 +123,7 @@ export async function PATCH(
       return fail("You can only share your own creations.", "FORBIDDEN");
     }
 
-    const db = getDb();
+    const db = await getDb();
     const now = nowIso();
     let { share_slug: shareSlug, visibility } = found.row;
     const showCaption =
@@ -132,7 +133,7 @@ export async function PATCH(
 
     if (body.visibility === "public") {
       if (visibility !== "public") {
-        const entitlements = getEntitlements(user.id);
+        const entitlements = await getEntitlements(user.id);
         if (!entitlements.canPublish) {
           return fail(
             `You've used all ${entitlements.plan.limits.publicShares} public share links on the ${entitlements.plan.name} plan. Make one private to free a slot.`,
@@ -142,13 +143,13 @@ export async function PATCH(
       }
       if (!shareSlug) shareSlug = generateToken(16); // 128-bit, unguessable
       visibility = "public";
-      logEvent(user.id, "creation_shared", "Published a creation with a share link", {
+      await logEvent(user.id, "creation_shared", "Published a creation with a share link", {
         creationId: safeId,
       });
       track("creation_shared", { userId: user.id, props: { frame: found.row.frame_id } });
     } else if (body.visibility === "private") {
       if (visibility === "public") {
-        logEvent(user.id, "creation_unshared", "Made a creation private again", {
+        await logEvent(user.id, "creation_unshared", "Made a creation private again", {
           creationId: safeId,
         });
         track("creation_unshared", {
@@ -160,21 +161,23 @@ export async function PATCH(
       shareSlug = null; // the old link stops working immediately
     }
 
-    db.prepare(
-      `UPDATE creations
+    await db
+      .prepare(
+        `UPDATE creations
        SET visibility = ?, share_slug = ?, share_show_caption = ?,
            published_at = CASE WHEN ? = 'public' THEN COALESCE(published_at, ?) ELSE NULL END,
            updated_at = ?
        WHERE id = ?`
-    ).run(
-      visibility,
-      shareSlug,
-      showCaption ? 1 : 0,
-      visibility,
-      now,
-      now,
-      safeId
-    );
+      )
+      .run(
+        visibility,
+        shareSlug,
+        showCaption ? 1 : 0,
+        visibility,
+        now,
+        now,
+        safeId
+      );
 
     return ok({
       creation: {

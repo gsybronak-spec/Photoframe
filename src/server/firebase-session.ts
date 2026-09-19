@@ -34,30 +34,31 @@ interface UserRow {
   firebase_uid: string | null;
 }
 
+const USER_COLS =
+  "id, email, name, role, status, email_verified_at, firebase_uid";
+
 /**
  * Find or create the application user for a verified Firebase identity.
  * Email is a unique column, so a pre-existing password-mode account with the
  * same email is linked (its firebase_uid is claimed) rather than duplicated.
  */
-export function upsertFirebaseUser(
+export async function upsertFirebaseUser(
   identity: VerifiedIdentity,
   displayName?: string
-): UserRow {
-  const db = getDb();
+): Promise<UserRow> {
+  const db = await getDb();
   const now = nowIso();
 
-  const byUid = db
-    .prepare("SELECT id, email, name, role, status, email_verified_at, firebase_uid FROM users WHERE firebase_uid = ?")
-    .get(identity.uid) as UserRow | undefined;
+  const byUid = (await db
+    .prepare(`SELECT ${USER_COLS} FROM users WHERE firebase_uid = ?`)
+    .get(identity.uid)) as UserRow | undefined;
   if (byUid) {
     // Keep the chosen display name fresh for returning users.
     const cleanName = (displayName ?? "").trim().slice(0, 60);
     if (cleanName && cleanName !== byUid.name) {
-      db.prepare("UPDATE users SET name = ?, updated_at = ? WHERE id = ?").run(
-        cleanName,
-        now,
-        byUid.id
-      );
+      await db
+        .prepare("UPDATE users SET name = ?, updated_at = ? WHERE id = ?")
+        .run(cleanName, now, byUid.id);
       return { ...byUid, name: cleanName };
     }
     return byUid;
@@ -65,32 +66,47 @@ export function upsertFirebaseUser(
 
   const email = (identity.email ?? "").toLowerCase();
   const byEmail = email
-    ? (db
-        .prepare("SELECT id, email, name, role, status, email_verified_at, firebase_uid FROM users WHERE email = ?")
-        .get(email) as UserRow | undefined)
+    ? ((await db
+        .prepare(`SELECT ${USER_COLS} FROM users WHERE email = ?`)
+        .get(email)) as UserRow | undefined)
     : undefined;
 
   if (byEmail) {
-    db.prepare("UPDATE users SET firebase_uid = ?, updated_at = ? WHERE id = ?").run(
-      identity.uid,
-      now,
-      byEmail.id
-    );
+    await db
+      .prepare("UPDATE users SET firebase_uid = ?, updated_at = ? WHERE id = ?")
+      .run(identity.uid, now, byEmail.id);
     return { ...byEmail, firebase_uid: identity.uid };
   }
 
   const id = generateToken(12);
-  const name = (displayName ?? "").trim().slice(0, 60) ||
+  const name =
+    (displayName ?? "").trim().slice(0, 60) ||
     (email ? email.split("@")[0].slice(0, 60) : `yogi-${id}`);
-  db.prepare(
-    `INSERT INTO users (id, email, name, password_hash, role, status, firebase_uid, email_verified_at, created_at, updated_at)
-     VALUES (?, ?, ?, '', 'user', 'active', ?, ?, ?, ?)`
-  ).run(id, email, name, identity.uid, identity.emailVerified ? now : null, now, now);
-  db.prepare("INSERT INTO profiles (user_id, bio, updated_at) VALUES (?, '', ?)").run(id, now);
 
-  return db
-    .prepare("SELECT id, email, name, role, status, email_verified_at, firebase_uid FROM users WHERE id = ?")
-    .get(id) as UserRow;
+  // User + profile are created together — one atomic unit on both engines.
+  await db.tx(async (tx) => {
+    await tx
+      .prepare(
+        `INSERT INTO users (id, email, name, password_hash, role, status, firebase_uid, email_verified_at, created_at, updated_at)
+       VALUES (?, ?, ?, '', 'user', 'active', ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        email,
+        name,
+        identity.uid,
+        identity.emailVerified ? now : null,
+        now,
+        now
+      );
+    await tx
+      .prepare("INSERT INTO profiles (user_id, bio, updated_at) VALUES (?, '', ?)")
+      .run(id, now);
+  });
+
+  return (await db
+    .prepare(`SELECT ${USER_COLS} FROM users WHERE id = ?`)
+    .get(id)) as UserRow;
 }
 
 /** Issues the standard app-session cookie for a verified Firebase identity. */
@@ -98,21 +114,23 @@ export async function createSessionForFirebaseUser(
   userId: string,
   req: Request
 ): Promise<void> {
-  const db = getDb();
+  const db = await getDb();
   const token = generateToken(32);
   const now = nowIso();
-  db.prepare(
-    `INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at, user_agent, ip_hash, last_seen_at)
+  await db
+    .prepare(
+      `INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at, user_agent, ip_hash, last_seen_at)
      VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`
-  ).run(
-    generateToken(12),
-    userId,
-    sha256(token),
-    new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-    now,
-    (req.headers.get("user-agent") ?? "").slice(0, 200) || null,
-    now
-  );
+    )
+    .run(
+      generateToken(12),
+      userId,
+      sha256(token),
+      new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+      now,
+      (req.headers.get("user-agent") ?? "").slice(0, 200) || null,
+      now
+    );
 
   const jar = await cookies();
   jar.set(SESSION_COOKIE, token, {
@@ -136,19 +154,20 @@ export async function establishFirebaseSession(
   const identity = await verifyFirebaseIdToken(idToken);
   if (!identity) return { ok: false, reason: "invalid_token" };
 
-  const user = upsertFirebaseUser(identity, displayName);
+  const user = await upsertFirebaseUser(identity, displayName);
   if (user.status === "suspended") return { ok: false, reason: "suspended" };
 
   // Keep email_verified_at in step with Firebase's verification state.
   if (identity.emailVerified && !user.email_verified_at) {
-    getDb()
+    const db = await getDb();
+    await db
       .prepare("UPDATE users SET email_verified_at = ?, updated_at = ? WHERE id = ?")
       .run(nowIso(), nowIso(), user.id);
-    logEvent(user.id, "account_verified", "Email verified via Firebase");
+    await logEvent(user.id, "account_verified", "Email verified via Firebase");
   }
 
   await createSessionForFirebaseUser(user.id, req);
-  logEvent(user.id, "signin", "Signed in with Firebase");
+  await logEvent(user.id, "signin", "Signed in with Firebase");
   return { ok: true, user };
 }
 
@@ -157,7 +176,8 @@ export async function destroyFirebaseSession(): Promise<void> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   if (token) {
-    getDb().prepare("DELETE FROM sessions WHERE token_hash = ?").run(sha256(token));
+    const db = await getDb();
+    await db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sha256(token));
   }
   jar.delete(SESSION_COOKIE);
   jar.delete(FIREBASE_TOKEN_COOKIE);

@@ -8,7 +8,6 @@
  */
 
 import { cookies } from "next/headers";
-import type { DatabaseSync } from "node:sqlite";
 import { getDb, nowIso } from "./db";
 import { generateToken, sha256 } from "./passwords";
 import { clientIp } from "./ratelimit";
@@ -44,48 +43,51 @@ export interface SessionRow {
  * kept in `settings`, so hashes are stable within a deployment but the raw
  * address never touches the database.
  */
-function sessionSalt(): string {
-  const db = getDb();
-  const row = db
+async function sessionSalt(): Promise<string> {
+  const db = await getDb();
+  const row = (await db
     .prepare("SELECT value FROM settings WHERE key = 'session_ip_salt'")
-    .get() as { value: string } | undefined;
+    .get()) as { value: string } | undefined;
   if (row) return row.value;
   const salt = generateToken(24);
-  db.prepare(
-    "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('session_ip_salt', ?, ?)"
-  ).run(salt, nowIso());
+  // Portable upsert: works on SQLite (3.24+) and PostgreSQL alike.
+  await db
+    .prepare(
+      "INSERT INTO settings (key, value, updated_at) VALUES ('session_ip_salt', ?, ?) ON CONFLICT(key) DO NOTHING"
+    )
+    .run(salt, nowIso());
   return salt;
 }
 
-export function ipHash(req: Request): string {
+export async function ipHash(req: Request): Promise<string> {
   const ip = clientIp(req);
-  return sha256(`${sessionSalt()}:${ip}`);
+  const salt = await sessionSalt();
+  return sha256(`${salt}:${ip}`);
 }
 
 /* ------------------------------------------------------------------ */
 /* Create / destroy                                                    */
 /* ------------------------------------------------------------------ */
 
-export async function createSession(
-  db: DatabaseSync,
-  userId: string,
-  req?: Request
-): Promise<string> {
+export async function createSession(userId: string, req?: Request): Promise<string> {
+  const db = await getDb();
   const token = generateToken(32);
   const now = nowIso();
-  db.prepare(
-    `INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at, user_agent, ip_hash, last_seen_at)
+  await db
+    .prepare(
+      `INSERT INTO sessions (id, user_id, token_hash, expires_at, created_at, user_agent, ip_hash, last_seen_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    generateToken(12),
-    userId,
-    sha256(token),
-    new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-    now,
-    req ? (req.headers.get("user-agent") ?? "").slice(0, 200) || null : null,
-    req ? ipHash(req) : null,
-    now
-  );
+    )
+    .run(
+      generateToken(12),
+      userId,
+      sha256(token),
+      new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+      now,
+      req ? (req.headers.get("user-agent") ?? "").slice(0, 200) || null : null,
+      req ? await ipHash(req) : null,
+      now
+    );
 
   const jar = await cookies();
   jar.set(SESSION_COOKIE, token, {
@@ -98,31 +100,35 @@ export async function createSession(
   return token;
 }
 
-export async function destroySession(db: DatabaseSync): Promise<void> {
+export async function destroySession(): Promise<void> {
+  const db = await getDb();
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   if (token) {
-    db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sha256(token));
+    await db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sha256(token));
   }
   jar.delete(SESSION_COOKIE);
 }
 
 export async function revokeAllSessions(userId: string): Promise<number> {
-  const res = getDb().prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
-  return Number(res.changes ?? 0);
+  const db = await getDb();
+  const res = await db
+    .prepare("DELETE FROM sessions WHERE user_id = ?")
+    .run(userId);
+  return res.changes;
 }
 
 /** Revokes every session except the one making the request. */
 export async function revokeOtherSessions(userId: string): Promise<number> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
-  const db = getDb();
+  const db = await getDb();
   const res = token
-    ? db
+    ? await db
         .prepare("DELETE FROM sessions WHERE user_id = ? AND token_hash != ?")
         .run(userId, sha256(token))
-    : db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
-  return Number(res.changes ?? 0);
+    : await db.prepare("DELETE FROM sessions WHERE user_id = ?").run(userId);
+  return res.changes;
 }
 
 export async function revokeSessionById(
@@ -130,10 +136,11 @@ export async function revokeSessionById(
   sessionId: string
 ): Promise<boolean> {
   // user_id in the WHERE clause makes cross-user revocation impossible (IDOR).
-  const res = getDb()
+  const db = await getDb();
+  const res = await db
     .prepare("DELETE FROM sessions WHERE id = ? AND user_id = ?")
     .run(sessionId, userId);
-  return Number(res.changes ?? 0) > 0;
+  return res.changes > 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -146,11 +153,9 @@ const USER_SELECT = `SELECT u.id, u.email, u.name, u.role,
                      FROM sessions s JOIN users u ON u.id = s.user_id
                      WHERE s.token_hash = ? AND s.expires_at > ?`;
 
-export function getUserBySessionToken(
-  db: DatabaseSync,
-  token: string
-): DbUser | null {
-  const row = db.prepare(USER_SELECT).get(sha256(token), nowIso()) as
+export async function getUserBySessionToken(token: string): Promise<DbUser | null> {
+  const db = await getDb();
+  const row = (await db.prepare(USER_SELECT).get(sha256(token), nowIso())) as
     | DbUser
     | undefined;
   if (!row) return null;
@@ -166,8 +171,7 @@ export async function getCurrentUser(): Promise<DbUser | null> {
   const token = jar.get(SESSION_COOKIE)?.value;
   if (!token) return null;
 
-  const db = getDb();
-  const user = getUserBySessionToken(db, token);
+  const user = await getUserBySessionToken(token);
   if (!user) return null;
 
   // Cheap activity tracking, throttled so it isn't a write per request.
@@ -175,9 +179,10 @@ export async function getCurrentUser(): Promise<DbUser | null> {
   if (now - lastTouch > 5 * 60 * 1000) {
     lastTouch = now;
     try {
-      db.prepare(
-        "UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?"
-      ).run(nowIso(), sha256(token));
+      const db = await getDb();
+      await db
+        .prepare("UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?")
+        .run(nowIso(), sha256(token));
     } catch {
       /* non-critical */
     }
@@ -199,13 +204,14 @@ export async function listSessions(userId: string): Promise<ActiveSession[]> {
   const jar = await cookies();
   const token = jar.get(SESSION_COOKIE)?.value;
   const currentHash = token ? sha256(token) : "";
-  const rows = getDb()
+  const db = await getDb();
+  const rows = (await db
     .prepare(
       `SELECT id, created_at, expires_at, last_seen_at, user_agent, token_hash
        FROM sessions WHERE user_id = ? AND expires_at > ?
        ORDER BY COALESCE(last_seen_at, created_at) DESC`
     )
-    .all(userId, nowIso()) as SessionRow[];
+    .all(userId, nowIso())) as SessionRow[];
   return rows.map((r) => ({
     id: r.id,
     created_at: r.created_at,

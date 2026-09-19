@@ -41,21 +41,22 @@ export default async function CreationDetailPage({
   if (!user) redirect("/login?next=/dashboard");
 
   const { id } = await params;
-  const row = getDb()
+  const db = await getDb();
+  const row = (await db
     .prepare(
       `SELECT id, user_id, frame_id, caption, bytes, mime_type, thumb_path,
               visibility, share_slug, share_show_caption, created_at, updated_at
        FROM creations WHERE id = ?`
     )
-    .get(id) as Row | undefined;
+    .get(id)) as Row | undefined;
 
   if (!row) notFound();
   // Server-side authorization: owners (and admins) only — 404 keeps this hidden
   // from anyone probing ids.
   if (row.user_id !== user.id && user.role !== "admin") notFound();
 
-  const frame = findAnyFrame(row.frame_id);
-  const entitlements = getEntitlements(user.id);
+  const frame = await findAnyFrame(row.frame_id);
+  const entitlements = await getEntitlements(user.id);
   const isPublic = row.visibility === "public";
   const isOwner = row.user_id === user.id;
 

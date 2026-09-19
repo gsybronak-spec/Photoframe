@@ -39,15 +39,15 @@ export default async function DashboardPage({
   const sp = await searchParams;
   const justVerified = sp.verified === "1";
 
-  const db = getDb();
-  const rows = db
+  const db = await getDb();
+  const rows = (await db
     .prepare(
       `SELECT id, frame_id, caption, bytes, thumb_path, visibility, share_slug,
               share_show_caption, created_at
        FROM creations WHERE user_id = ?
        ORDER BY created_at DESC, id DESC LIMIT ?`
     )
-    .all(user.id, PAGE_SIZE + 1) as {
+    .all(user.id, PAGE_SIZE + 1)) as {
     id: string;
     frame_id: string;
     caption: string | null;
@@ -75,35 +75,35 @@ export default async function DashboardPage({
     createdAt: c.created_at,
   }));
 
-  const totals = db
+  const totals = (await db
     .prepare(
       `SELECT COUNT(*) AS n,
               COALESCE(SUM(bytes), 0) AS bytes,
               COALESCE(SUM(CASE WHEN visibility = 'public' THEN 1 ELSE 0 END), 0) AS publicCount
        FROM creations WHERE user_id = ?`
     )
-    .get(user.id) as { n: number; bytes: number; publicCount: number };
+    .get(user.id)) as { n: number; bytes: number; publicCount: number };
 
-  const savedFrames = db
+  const savedFrames = (await db
     .prepare(
       "SELECT frame_id, created_at FROM saved_frames WHERE user_id = ? ORDER BY created_at DESC LIMIT 6"
     )
-    .all(user.id) as { frame_id: string; created_at: string }[];
+    .all(user.id)) as { frame_id: string; created_at: string }[];
 
-  const activity = recentActivity(user.id, 8);
-  const entitlements = getEntitlements(user.id);
+  const activity = await recentActivity(user.id, 8);
+  const entitlements = await getEntitlements(user.id);
   const avatarUrl =
     (
-      db.prepare("SELECT avatar_url FROM profiles WHERE user_id = ?").get(user.id) as
-        | { avatar_url: string | null }
-        | undefined
+      (await db
+        .prepare("SELECT avatar_url FROM profiles WHERE user_id = ?")
+        .get(user.id)) as { avatar_url: string | null } | undefined
     )?.avatar_url ?? null;
   const activeSessions = (
-    db
+    (await db
       .prepare(
         "SELECT COUNT(*) AS n FROM sessions WHERE user_id = ? AND expires_at > ?"
       )
-      .get(user.id, nowIso()) as { n: number }
+      .get(user.id, nowIso())) as { n: number }
   ).n;
 
   const savedFrameCards = savedFrames

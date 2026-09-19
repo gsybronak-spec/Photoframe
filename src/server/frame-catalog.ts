@@ -33,10 +33,11 @@ interface OverrideRow {
   updated_at: string;
 }
 
-function overrides(): Map<string, OverrideRow> {
-  const rows = getDb()
+async function overrides(): Promise<Map<string, OverrideRow>> {
+  const db = await getDb();
+  const rows = (await db
     .prepare("SELECT * FROM frame_overrides")
-    .all() as OverrideRow[];
+    .all()) as OverrideRow[];
   return new Map(rows.map((r) => [r.frame_id, r]));
 }
 
@@ -70,19 +71,19 @@ function merge(frame: Frame, row?: OverrideRow): CatalogFrame {
 }
 
 /** Every frame, including inactive ones (admin view). */
-export function getCatalog(): CatalogFrame[] {
-  const rows = overrides();
+export async function getCatalog(): Promise<CatalogFrame[]> {
+  const rows = await overrides();
   return FRAMES.map((f) => merge(f, rows.get(f.slug)));
 }
 
 /** Public gallery: active frames only. */
-export function getPublicFrames(): CatalogFrame[] {
-  return getCatalog().filter((f) => f.active);
+export async function getPublicFrames(): Promise<CatalogFrame[]> {
+  return (await getCatalog()).filter((f) => f.active);
 }
 
 /** Homepage rail. Falls back to `trending` flags when nothing is featured. */
-export function getFeaturedFrames(limit = 4): CatalogFrame[] {
-  const active = getPublicFrames();
+export async function getFeaturedFrames(limit = 4): Promise<CatalogFrame[]> {
+  const active = await getPublicFrames();
   const featured = active.filter((f) => f.featured);
   return (featured.length ? featured : active.filter((f) => f.trending)).slice(
     0,
@@ -91,19 +92,19 @@ export function getFeaturedFrames(limit = 4): CatalogFrame[] {
 }
 
 /** Merged frame by slug — undefined for unknown or (optionally) inactive frames. */
-export function findFrame(
+export async function findFrame(
   slug: string,
   opts: { includeInactive?: boolean } = {}
-): CatalogFrame | undefined {
+): Promise<CatalogFrame | undefined> {
   const base = FRAMES.find((f) => f.slug === slug);
   if (!base) return undefined;
-  const merged = merge(base, overrides().get(base.slug));
+  const merged = merge(base, (await overrides()).get(base.slug));
   if (!opts.includeInactive && !merged.active) return undefined;
   return merged;
 }
 
 /** Merged frame for editor/gallery use where an inactive frame is still valid. */
-export function findAnyFrame(slug: string): CatalogFrame | undefined {
+export async function findAnyFrame(slug: string): Promise<CatalogFrame | undefined> {
   return findFrame(slug, { includeInactive: true });
 }
 
@@ -121,16 +122,16 @@ export interface FramePatch {
 
 const VALID_CATEGORIES = new Set<string>(OCCASIONS);
 
-export function updateFrame(
+export async function updateFrame(
   slug: string,
   patch: FramePatch,
   adminId: string
-): CatalogFrame | null {
+): Promise<CatalogFrame | null> {
   const base = FRAMES.find((f) => f.slug === slug);
   if (!base) return null;
 
-  const db = getDb();
-  const current = overrides().get(slug);
+  const db = await getDb();
+  const current = (await overrides()).get(slug);
   const defaults = codeMeta(base);
 
   const next = {
@@ -170,10 +171,11 @@ export function updateFrame(
     next.tags === null;
 
   if (matchesDefaults) {
-    db.prepare("DELETE FROM frame_overrides WHERE frame_id = ?").run(slug);
+    await db.prepare("DELETE FROM frame_overrides WHERE frame_id = ?").run(slug);
   } else {
-    db.prepare(
-      `INSERT INTO frame_overrides (frame_id, description, category, tags, featured, active, updated_at, updated_by)
+    await db
+      .prepare(
+        `INSERT INTO frame_overrides (frame_id, description, category, tags, featured, active, updated_at, updated_by)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(frame_id) DO UPDATE SET
          description = excluded.description,
@@ -183,19 +185,20 @@ export function updateFrame(
          active      = excluded.active,
          updated_at  = excluded.updated_at,
          updated_by  = excluded.updated_by`
-    ).run(
-      slug,
-      next.description,
-      next.category,
-      next.tags,
-      next.featured,
-      next.active,
-      nowIso(),
-      adminId
-    );
+      )
+      .run(
+        slug,
+        next.description,
+        next.category,
+        next.tags,
+        next.featured,
+        next.active,
+        nowIso(),
+        adminId
+      );
   }
 
-  return findFrame(slug, { includeInactive: true }) ?? null;
+  return (await findFrame(slug, { includeInactive: true })) ?? null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -212,10 +215,11 @@ const SETTING_DEFAULTS: SiteSettings = {
   featured_limit: 4,
 };
 
-export function getSettings(): SiteSettings {
-  const rows = getDb()
+export async function getSettings(): Promise<SiteSettings> {
+  const db = await getDb();
+  const rows = (await db
     .prepare("SELECT key, value FROM settings WHERE key IN ('hero_tagline','featured_limit')")
-    .all() as { key: string; value: string }[];
+    .all()) as { key: string; value: string }[];
   const map = new Map(rows.map((r) => [r.key, r.value]));
   const limit = Number(map.get("featured_limit"));
   return {
@@ -227,29 +231,37 @@ export function getSettings(): SiteSettings {
   };
 }
 
-export function setSettings(patch: Partial<SiteSettings>, adminId: string): SiteSettings {
-  const db = getDb();
+export async function setSettings(
+  patch: Partial<SiteSettings>,
+  adminId: string
+): Promise<SiteSettings> {
+  const db = await getDb();
   const now = nowIso();
-  const write = (key: string, value: string) =>
-    db
-      .prepare(
-        `INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
-           updated_at = excluded.updated_at, updated_by = excluded.updated_by`
-      )
-      .run(key, value, now, adminId);
 
-  if (patch.hero_tagline !== undefined) {
-    write("hero_tagline", cleanText(patch.hero_tagline, 120));
-  }
-  if (patch.featured_limit !== undefined) {
-    const n = Number(patch.featured_limit);
-    write("featured_limit", String(Math.min(8, Math.max(1, Math.floor(n) || 4))));
-  }
+  // Both settings writes land together or not at all — tx receives a Db bound
+  // to the transaction connection (BEGIN/COMMIT on SQLite, pooled client on pg).
+  await db.tx(async (tx) => {
+    const write = async (key: string, value: string) =>
+      tx
+        .prepare(
+          `INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+             updated_at = excluded.updated_at, updated_by = excluded.updated_by`
+        )
+        .run(key, value, now, adminId);
+
+    if (patch.hero_tagline !== undefined) {
+      await write("hero_tagline", cleanText(patch.hero_tagline, 120));
+    }
+    if (patch.featured_limit !== undefined) {
+      const n = Number(patch.featured_limit);
+      await write("featured_limit", String(Math.min(8, Math.max(1, Math.floor(n) || 4))));
+    }
+  });
   return getSettings();
 }
 
 /** Featured frame slugs, used by the homepage rail. */
-export function featuredSlugs(): string[] {
-  return getFeaturedFrames(8).map((f) => f.slug);
+export async function featuredSlugs(): Promise<string[]> {
+  return (await getFeaturedFrames(8)).map((f) => f.slug);
 }

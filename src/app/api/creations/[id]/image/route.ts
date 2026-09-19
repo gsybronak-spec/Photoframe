@@ -32,12 +32,13 @@ export async function GET(
     const safeId = cleanId(id);
     if (!safeId) return fail("Not found", "NOT_FOUND");
 
-    const row = getDb()
+    const db = await getDb();
+    const row = (await db
       .prepare(
         `SELECT user_id, mime_type, storage_path, thumb_path, bytes, thumb_bytes, updated_at
          FROM creations WHERE id = ?`
       )
-      .get(safeId) as ImageRow | undefined;
+      .get(safeId)) as ImageRow | undefined;
 
     if (!row) return fail("Not found", "NOT_FOUND");
     if (row.user_id !== user.id && user.role !== "admin") {

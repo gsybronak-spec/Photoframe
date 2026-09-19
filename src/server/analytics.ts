@@ -90,24 +90,30 @@ export function track(
   input: { userId?: string | null; props?: Record<string, unknown> } = {}
 ): void {
   const props = sanitizeProps(input.props ?? {});
-  try {
-    getDb()
-      .prepare(
-        "INSERT INTO analytics_events (id, user_id, event, props, created_at) VALUES (?, ?, ?, ?, ?)"
-      )
-      .run(
-        generateToken(12),
-        input.userId ?? null,
-        event,
-        JSON.stringify(props),
-        nowIso()
+  // Fire-and-forget by contract: callers invoke track() without awaiting, so
+  // the write is dispatched to the driver without touching request latency.
+  // Errors are logged by the driver layer; analytics never breaks a request.
+  void (async () => {
+    try {
+      const db = await getDb();
+      await db
+        .prepare(
+          "INSERT INTO analytics_events (id, user_id, event, props, created_at) VALUES (?, ?, ?, ?, ?)"
+        )
+        .run(
+          generateToken(12),
+          input.userId ?? null,
+          event,
+          JSON.stringify(props),
+          nowIso()
+        );
+    } catch (err) {
+      console.error(
+        "[analytics] insert failed:",
+        err instanceof Error ? err.message : err
       );
-  } catch (err) {
-    console.error(
-      "[analytics] insert failed:",
-      err instanceof Error ? err.message : err
-    );
-  }
+    }
+  })();
   void forwardToProvider(event, props);
 }
 
@@ -116,20 +122,20 @@ export interface AnalyticsSummaryRow {
   n: number;
 }
 
-export function analyticsSummary(days = 30): AnalyticsSummaryRow[] {
+export async function analyticsSummary(days = 30): Promise<AnalyticsSummaryRow[]> {
   const since = new Date(Date.now() - days * 86400e3).toISOString();
-  return getDb()
+  const db = await getDb();
+  return (await db
     .prepare(
       `SELECT event, COUNT(*) AS n FROM analytics_events
        WHERE created_at >= ? GROUP BY event ORDER BY n DESC LIMIT 25`
     )
-    .all(since) as AnalyticsSummaryRow[];
+    .all(since)) as AnalyticsSummaryRow[];
 }
 
-export function analyticsTotal(): number {
+export async function analyticsTotal(): Promise<number> {
+  const db = await getDb();
   return (
-    getDb().prepare("SELECT COUNT(*) AS n FROM analytics_events").get() as {
-      n: number;
-    }
+    (await db.prepare("SELECT COUNT(*) AS n FROM analytics_events").get()) as { n: number }
   ).n;
 }

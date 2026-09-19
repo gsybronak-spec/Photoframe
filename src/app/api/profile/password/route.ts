@@ -38,24 +38,22 @@ export async function POST(req: Request) {
   if (current === next) return fail("Choose a password you haven't used here before.");
 
   try {
-    const db = getDb();
-    const row = db
+    const db = await getDb();
+    const row = (await db
       .prepare("SELECT password_hash FROM users WHERE id = ?")
-      .get(user.id) as { password_hash: string } | undefined;
+      .get(user.id)) as { password_hash: string } | undefined;
     if (!row) return fail("Account not found.", "NOT_FOUND");
     if (!(await verifyPassword(current, row.password_hash))) {
       return fail("Your current password is incorrect.", "FORBIDDEN");
     }
 
     const now = nowIso();
-    db.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?").run(
-      await hashPassword(next),
-      now,
-      user.id
-    );
+    await db
+      .prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+      .run(await hashPassword(next), now, user.id);
 
     const revoked = await revokeOtherSessions(user.id);
-    logEvent(
+    await logEvent(
       user.id,
       "password_changed",
       revoked ? `Password changed — ${revoked} other session(s) signed out` : "Password changed"

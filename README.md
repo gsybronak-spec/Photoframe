@@ -102,9 +102,36 @@ configured.
 
 ### Database
 
+ZenFrame runs on two engines through one driver boundary (`src/server/db.ts`).
+Driver selection is **deterministic** — it never silently falls back:
+
+| Situation | Driver |
+|---|---|
+| `DATABASE_DRIVER=postgres` | PostgreSQL (`pg` pool, `DATABASE_URL` required) |
+| `DATABASE_DRIVER=sqlite` | local SQLite — **refused in production** (hard boot error; the only bypass is the test-only `ZENFRAME_ALLOW_TEST_SQLITE=1`) |
+| unset, `DATABASE_URL` set | PostgreSQL |
+| unset, no `DATABASE_URL` | SQLite locally / **hard error in production** |
+
+**Production (Vercel):** set `DATABASE_URL` to a managed Postgres (Neon pooled
+connection). Apply the idempotent schema once with
+`psql "$DATABASE_URL" -f db/schema-postgres.sql` — on an empty database the app
+also auto-applies the same embedded baseline on first boot. The pg driver
+translates `?` → `$n` placeholders automatically, coerces `int8`/`numeric`
+results to numbers, and provides **real transactions** (`db.tx` = BEGIN/COMMIT
+on a pooled client, ROLLBACK on error). `ZENFRAME_DATA_DIR`/SQLite are **not**
+used for production application data.
+
 | Variable | Purpose |
 |---|---|
-| `ZENFRAME_DATA_DIR` | Directory that holds `zenframe.db` and `uploads/`. Defaults to `data/` next to the project root. Set this in production to a persistent volume mount. |
+| `DATABASE_URL` | PostgreSQL connection string. Required in production (Neon `?sslmode=require` works). |
+| `DATABASE_DRIVER` | `postgres` or `sqlite`. Optional — inferred from `DATABASE_URL`. |
+| `PG_POOL_MAX` | Max pg pool connections per serverless instance (default 5). |
+| `ZENFRAME_DATA_DIR` | Development only: holds `zenframe.db` and `uploads/`. Not used for production application data. |
+
+Postgres integration test against a disposable database:
+`TEST_DATABASE_URL=postgres://… npm run test:postgres` (16 checks covering
+every table, upserts, JOINs, aggregates, type coercion, transaction rollback
+and cleanup; skips honestly with exit 0 when no URL is configured).
 
 ### Rate limiting
 
@@ -164,12 +191,12 @@ and the app picks the first configured provider automatically.
 
 ### Database migrations
 
-The database migrates itself on first request. Migrations live in
-`src/server/db.ts` as an ordered `MIGRATIONS` array, each with a version, name,
-and idempotent SQL body. The current schema version and the timestamp each
-migration was applied are tracked in `schema_migrations`, so the upgrade is
-equivalent to `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — safe to run
-repeatedly, and never destructive.
+**SQLite (development engine):** the database migrates itself on first request.
+Migrations live in `src/server/db.ts` as an ordered `MIGRATIONS` array, each
+with a version, name, and idempotent SQL body. The current schema version and
+the timestamp each migration was applied are tracked in `schema_migrations`, so
+the upgrade is equivalent to `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — safe
+to run repeatedly, and never destructive.
 
 Key points:
 - Migrations are numbered and sorted; order is deterministic.
@@ -178,9 +205,27 @@ Key points:
   `UPDATE ... WHERE ... IS NOT NULL`).
 - Schema checks (`npm run db:check`) report applied migrations and flag rows
   that violate the current safety rules (unsafe keys, missing thumbnails for
-  public creations, etc.).
+  public creations, etc.). `db:check` (and `db:backup`/`db:admin`) are SQLite
+  development tools — under the Postgres driver they exit 1 with the
+  provider-equivalent command instead of touching SQLite.
+
+**PostgreSQL (production engine):** uses `db/schema-postgres.sql` as the
+versioned baseline. It is idempotent (`CREATE TABLE IF NOT EXISTS` /
+`ADD COLUMN IF NOT EXISTS` style), safe to re-run, never destructive, and
+mirrors the SQLite migrations 1:1 (a drift check in `npm run test:postgres`
+compares the SQL file against the schema embedded in `src/server/db.ts`).
+Schema changes: add a new idempotent block to **both** the SQLite `MIGRATIONS`
+array and `db/schema-postgres.sql`, keeping them in lockstep.
 
 ### Database backup & restore
+
+**PostgreSQL (production):** backups belong to the provider — enable Neon
+point-in-time restore (PITR), or take manual snapshots with
+`pg_dump "$DATABASE_URL" > backup.sql` (restore with
+`psql "$DATABASE_URL" < backup.sql`). Creation images live in Vercel Blob;
+Blob snapshots/versioning are managed in the Vercel dashboard.
+
+**SQLite (development):**
 
 ```bash
 npm run db:backup        # VACUUM INTO data/backups/zenframe-<timestamp>.db (safe on a live WAL db)
@@ -346,12 +391,20 @@ falls back to in-memory and logs a warning rather than silently failing open.
 ## Testing
 
 ```bash
-npm run build        # production build + typecheck + route generation
-npm run lint         # eslint (zero errors expected)
-npx tsc --noEmit     # strict TypeScript check
-npm run test:api     # full regression + security suite
-npm run db:check     # database integrity + portability report
+npm run build          # production build + typecheck + route generation
+npm run lint           # eslint (zero errors expected)
+npx tsc --noEmit       # strict TypeScript check
+npm run test:api       # full regression + security suite (59 checks)
+npm run db:check       # SQLite integrity + portability report (dev tool)
+npm run test:postgres  # PostgreSQL adapter integration test (needs TEST_DATABASE_URL)
 ```
+
+`npm run test:postgres` exercises the real adapter against a disposable
+PostgreSQL database (16 checks: users, profiles, sessions, creations,
+saved_frames, activity, analytics, settings, frame_overrides, subscriptions,
+email_deliveries, aggregates, JOINs, numeric type coercion, transaction
+rollback, cleanup). Without `TEST_DATABASE_URL`/`DATABASE_URL` it prints
+"PostgreSQL integration test not executed" and exits 0 — it never fakes a pass.
 
 `npm run test:api` starts its own throwaway server against a temporary database
 so it can't hit your dev data. It covers: signup/login/logout, verification,
@@ -399,13 +452,14 @@ HttpOnly app-session cookie as before — so every existing `requireUser` /
 application database, and auth state never lives in localStorage.
 
 > **Adapter status (honest):** the Firebase auth bridge, the Vercel Blob
-> driver, and the Postgres schema (`db/schema-postgres.sql`, applied with
-> `psql "$DATABASE_URL" -f db/schema-postgres.sql`) are implemented and
-> type-checked, and the session/authorization flow is exercised by the API
-> suite in password mode. The Postgres runtime adapter and the Firebase path
-> itself are **not yet exercised end-to-end against live services** — that
-> requires real Firebase/Neon/Vercel credentials (see "Firebase setup" and
-> "Vercel setup" below).
+> driver, and the **PostgreSQL runtime adapter** (`src/server/db.ts` pg driver:
+> pooled connections, `$n` placeholders, numeric coercion, real transactions,
+> embedded idempotent baseline schema) are implemented, type-checked, and
+> exercised by the API suite in password mode on SQLite. The integration test
+> (`npm run test:postgres`) runs the adapter through 16 checks against any
+> disposable Postgres. What remains unexercised end-to-end: a **live** Neon
+> connection, live Firebase sign-in, and a live Blob round-trip — these need
+> real credentials (see "Firebase setup" and "Vercel setup" below).
 
 ### Startup configuration validation
 
@@ -414,6 +468,7 @@ The server validates its own configuration once at boot
 prints a loud, itemized warning for each problem it detects:
 
 - no email provider configured (reset/verification mail will fail)
+- no `DATABASE_URL` in production (Postgres is mandatory; SQLite is refused)
 - `ALLOW_DEV_MAIL_LOG=1` set in production (security risk)
 - `ZENFRAME_DATA_DIR` unset (ephemeral default → data loss on redeploy) or not writable
 - `NEXT_PUBLIC_SITE_URL` missing or not `https://` (Secure cookies won't work)
@@ -425,13 +480,19 @@ A warning never crashes the server — but an operator should treat any
 
 ### Requirements
 
-- Node.js 22+ (for `node:sqlite`).
-- A persistent filesystem for `ZENFRAME_DATA_DIR` (SQLite file + uploads + backups).
+- Node.js 22+ (for `node:sqlite` in development; pg is bundled).
+- **PostgreSQL**: `DATABASE_URL` pointing at a managed Postgres (Neon). This is
+  mandatory — production boots refuse SQLite. Apply
+  `db/schema-postgres.sql` once.
+- **Vercel Blob**: connect a Blob store so `BLOB_READ_WRITE_TOKEN` is injected
+  and set `STORAGE_DRIVER=blob` (creation images must not live on the function
+  filesystem).
 - `NEXT_PUBLIC_SITE_URL` set to the live **HTTPS** domain.
 - A real email provider configured (`RESEND_API_KEY` or `SMTP_*`), because
   production refuses to send email otherwise.
 - Optionally `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` — only
   relevant if you run more than one instance (rate limiting only).
+- `ZENFRAME_DATA_DIR` is a **development** variable — do not set it on Vercel.
 
 ### HTTPS / HSTS
 
@@ -456,7 +517,8 @@ host's load balancer). Two things to know:
 npm ci
 npm run build
 # set NODE_ENV=production, NEXT_PUBLIC_SITE_URL (https://…), RESEND_API_KEY (or SMTP_*),
-# MAIL_FROM, and ZENFRAME_DATA_DIR on a persistent volume
+# MAIL_FROM. DATABASE_URL (Postgres) + STORAGE_DRIVER=blob on Vercel —
+# ZENFRAME_DATA_DIR is development-only and must NOT be set in production
 npm start
 # then read the boot log: any [zenframe:config] warning is a launch blocker
 npm run db:admin -- you@studio.com   # promote the first admin after they sign up

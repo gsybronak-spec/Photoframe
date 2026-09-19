@@ -1,24 +1,25 @@
 /**
- * SQLite database layer (node:sqlite, zero dependencies).
+ * Database layer — driver boundary.
  *
- * Production notes
- * ----------------
- * - One synchronous connection per process, WAL journal so readers never block
- *   the writer, `busy_timeout` so concurrent writers retry instead of throwing,
- *   and foreign keys enforced at the engine level.
- * - Schema changes are versioned (`schema_migrations`). Migrations are
- *   deterministic, forward-only, idempotent and never destructive: a migration
- *   only ever CREATEs or ADDs. There are no DROP statements anywhere.
- * - `assertSchemaIntegrity()` runs after migration and throws a loud, actionable
- *   error if a required table/column is missing, so a broken deploy can never
- *   silently serve traffic against a partial schema.
+ * Two engines, one interface:
  *
- * Deployment guidance: SQLite is safe when the filesystem under
- * ZENFRAME_DATA_DIR is persistent (a VM, container with a volume, Fly.io volume,
- * Railway volume, Docker volume…). On a serverless/ephemeral filesystem
- * (Vercel/Lambda), it is NOT safe — deploy with the PostgreSQL schema
- * (db/schema-postgres.sql) and the documented adapter path instead. The
- * repository layer is plain SQL, so queries port forward with minimal changes.
+ *   sqlite    node:sqlite, synchronous under the hood, wrapped async so call
+ *             sites are engine-agnostic. LOCAL DEVELOPMENT ONLY.
+ *   postgres  pg + a small pooled client (serverless-safe). PRODUCTION.
+ *
+ * Selection is deterministic (see resolveDriver):
+ *   DATABASE_DRIVER=sqlite|postgres  → explicit choice (sqlite refused in production)
+ *   else DATABASE_URL present        → postgres
+ *   else NODE_ENV=production         → HARD ERROR (never silently fall back)
+ *   else                             → sqlite (local dev)
+ *
+ * All identifiers are application-generated and every query is plain SQL that
+ * works on both engines (no lastInsertRowid, no SQLite datetime functions,
+ * ON CONFLICT … DO UPDATE everywhere). Timestamps are ISO-8601 TEXT.
+ *
+ * SQLite migrations stay versioned in `schema_migrations` exactly as before.
+ * PostgreSQL uses the idempotent baseline schema (embedded below, mirrored in
+ * db/schema-postgres.sql for psql) plus the same version tracking.
  */
 
 import { DatabaseSync } from "node:sqlite";
@@ -28,6 +29,8 @@ import path from "node:path";
 declare global {
   var __zenframeDb: DatabaseSync | undefined;
   var __zenframeMigrationsRun: number | undefined;
+  var __zenframePgPool: import("pg").Pool | undefined;
+  var __zenframePgReady: Promise<void> | undefined;
 }
 
 export const DATA_DIR = process.env.ZENFRAME_DATA_DIR
@@ -44,7 +47,335 @@ export const cutoffIso = (days: number) =>
   new Date(Date.now() - days * 86400e3).toISOString();
 
 /* ------------------------------------------------------------------ */
-/* Schema migrations                                                   */
+/* Driver interface                                                    */
+/* ------------------------------------------------------------------ */
+
+export type DbValue = string | number | null;
+
+export interface DbRow {
+  [column: string]: unknown;
+}
+
+export interface DbRunResult {
+  changes: number;
+}
+
+export interface DbStatement {
+  get(...params: DbValue[]): Promise<unknown>;
+  all(...params: DbValue[]): Promise<unknown[]>;
+  run(...params: DbValue[]): Promise<DbRunResult>;
+}
+
+export interface Db {
+  prepare(sql: string): DbStatement;
+  /** Multi-statement DDL / maintenance (driver-native). */
+  exec(sql: string): Promise<void>;
+  /**
+   * Real transaction. `fn` receives a Db bound to the transaction connection;
+   * on SQLite this is BEGIN…COMMIT, on Postgres it is the pooled client.
+   * Nested transactions throw — compose at one level.
+   */
+  tx<T>(fn: (tx: Db) => Promise<T>): Promise<T>;
+}
+
+export type DatabaseDriverName = "sqlite" | "postgres";
+
+/* ------------------------------------------------------------------ */
+/* Driver selection — deterministic, fail-loud                         */
+/* ------------------------------------------------------------------ */
+
+export function resolveDriver(): DatabaseDriverName {
+  // During `next build` the process runs with NODE_ENV=production while pages
+  // are prerendered for static export. That is a build-time evaluation, not a
+  // production request: defer the production requirements to actual boot.
+  const building = process.env.NEXT_PHASE === "phase-production-build";
+  const prod = process.env.NODE_ENV === "production" && !building;
+
+  const explicit = (process.env.DATABASE_DRIVER ?? "").trim().toLowerCase();
+  if (explicit) {
+    if (explicit !== "sqlite" && explicit !== "postgres") {
+      throw new Error(
+        `[zenframe] Invalid DATABASE_DRIVER "${explicit}" — use "sqlite" or "postgres".`
+      );
+    }
+    if (explicit === "sqlite" && prod) {
+      // Test-only escape hatch: the automated suite runs a production server
+      // against a throwaway SQLite database. It must be set EXPLICITLY, so it
+      // can never happen by accident or by misconfiguration.
+      if (process.env.ZENFRAME_ALLOW_TEST_SQLITE === "1") {
+        console.warn(
+          "[zenframe] TEST OVERRIDE ACTIVE — SQLite driver allowed in " +
+            "production mode. This must ONLY come from the test harness."
+        );
+        return "sqlite";
+      }
+      throw new Error(
+        "[zenframe] DATABASE_DRIVER=sqlite is not allowed in production. " +
+          "Set DATABASE_URL (Neon/Postgres) — SQLite is development-only."
+      );
+    }
+    return explicit;
+  }
+  if (process.env.DATABASE_URL) return "postgres";
+  if (prod) {
+    throw new Error(
+      "[zenframe] Production requires a PostgreSQL database: set DATABASE_URL " +
+        "(Neon/managed Postgres). SQLite is not available in production."
+    );
+  }
+  return "sqlite";
+}
+
+/* ------------------------------------------------------------------ */
+/* PostgreSQL driver                                                   */
+/* ------------------------------------------------------------------ */
+
+/** Postgres baseline schema — must stay in sync with db/schema-postgres.sql
+ *  (verified by scripts/test-postgres.mjs when the file is present). */
+export const POSTGRES_BASELINE_SCHEMA = String.raw`
+CREATE TABLE IF NOT EXISTS users (
+  id                TEXT PRIMARY KEY,
+  email             TEXT NOT NULL UNIQUE,
+  name              TEXT NOT NULL,
+  password_hash     TEXT NOT NULL DEFAULT '',
+  role              TEXT NOT NULL DEFAULT 'user',
+  status            TEXT NOT NULL DEFAULT 'active',
+  disabled_at       TEXT,
+  email_verified_at TEXT,
+  firebase_uid      TEXT UNIQUE,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profiles (
+  user_id     TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  bio         TEXT NOT NULL DEFAULT '',
+  avatar_url  TEXT,
+  studio      TEXT,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash   TEXT NOT NULL UNIQUE,
+  expires_at   TEXT NOT NULL,
+  created_at   TEXT NOT NULL,
+  user_agent   TEXT,
+  ip_hash      TEXT,
+  last_seen_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS verification_tokens (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL CHECK (kind IN ('verify_email','password_reset')),
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TEXT NOT NULL,
+  used_at    TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tokens_user_kind
+  ON verification_tokens(user_id, kind, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS creations (
+  id                  TEXT PRIMARY KEY,
+  user_id             TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  frame_id            TEXT NOT NULL,
+  caption             TEXT,
+  storage_path        TEXT NOT NULL,
+  mime_type           TEXT NOT NULL DEFAULT 'image/png',
+  bytes               INTEGER NOT NULL,
+  thumb_path          TEXT,
+  thumb_bytes         INTEGER NOT NULL DEFAULT 0,
+  visibility          TEXT NOT NULL DEFAULT 'private',
+  share_slug          TEXT UNIQUE,
+  share_show_caption  INTEGER NOT NULL DEFAULT 1,
+  published_at        TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_creations_user ON creations(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_creations_public ON creations(visibility, published_at DESC);
+
+CREATE TABLE IF NOT EXISTS saved_frames (
+  user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  frame_id    TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  PRIMARY KEY (user_id, frame_id)
+);
+
+CREATE TABLE IF NOT EXISTS activity (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT REFERENCES users(id) ON DELETE CASCADE,
+  actor_id   TEXT,
+  type       TEXT NOT NULL,
+  message    TEXT NOT NULL,
+  meta       TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_activity_user ON activity(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_created ON activity(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_activity_type ON activity(type, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS frame_overrides (
+  frame_id    TEXT PRIMARY KEY,
+  description TEXT,
+  category    TEXT,
+  tags        TEXT,
+  featured    INTEGER,
+  active      INTEGER,
+  updated_at  TEXT NOT NULL,
+  updated_by  TEXT REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  updated_by TEXT REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+  user_id            TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  plan_id            TEXT NOT NULL DEFAULT 'free',
+  status             TEXT NOT NULL DEFAULT 'active',
+  current_period_end TEXT,
+  created_at         TEXT NOT NULL,
+  updated_at         TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS analytics_events (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT REFERENCES users(id) ON DELETE SET NULL,
+  event      TEXT NOT NULL,
+  props      TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_event ON analytics_events(event, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_analytics_user ON analytics_events(user_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS email_deliveries (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT REFERENCES users(id) ON DELETE SET NULL,
+  template   TEXT NOT NULL,
+  to_domain  TEXT NOT NULL,
+  provider   TEXT NOT NULL,
+  status     TEXT NOT NULL,
+  detail     TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_email_deliveries ON email_deliveries(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  version    INTEGER PRIMARY KEY,
+  name       TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+);
+`;
+
+/**
+ * `?` → `$1, $2, …` outside single-quoted literals. The codebase never uses `?`
+ * inside SQL string literals (verified in the dialect audit), but the guard
+ * keeps a future pattern like `WHERE note LIKE '%?%'` safe.
+ */
+export function toPgPlaceholders(sql: string): string {
+  let out = "";
+  let inQuote = false;
+  let n = 0;
+  for (const ch of sql) {
+    if (ch === "'") inQuote = !inQuote;
+    if (ch === "?" && !inQuote) out += `$${++n}`;
+    else out += ch;
+  }
+  return out;
+}
+
+const PG_POOL_MAX = Number(process.env.PG_POOL_MAX ?? 5);
+
+async function createPgPool(): Promise<import("pg").Pool> {
+  const { Pool } = await import("pg");
+  const url = process.env.DATABASE_URL;
+  if (!url) {
+    throw new Error(
+      "[zenframe] DATABASE_DRIVER=postgres but DATABASE_URL is not set."
+    );
+  }
+  // Neon/managed Postgres require TLS; local postgres does not.
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("[zenframe] DATABASE_URL is not a valid connection string.");
+  }
+  const isLocal =
+    parsed.hostname === "localhost" ||
+    parsed.hostname === "127.0.0.1" ||
+    parsed.hostname === "::1";
+  const wantsSsl =
+    parsed.searchParams.get("sslmode") === "require" ||
+    parsed.searchParams.get("sslmode") === "verify-full" ||
+    (!isLocal && parsed.searchParams.get("sslmode") !== "disable");
+
+  return new Pool({
+    connectionString: url,
+    max: Number.isFinite(PG_POOL_MAX) && PG_POOL_MAX > 0 ? PG_POOL_MAX : 5,
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 10_000,
+    ssl: wantsSsl ? { rejectUnauthorized: false } : undefined,
+  });
+}
+
+/**
+ * int8/numeric arrive as strings from pg; the app expects numbers. Builds a
+ * row object keyed by column name (pg rowMode "array" returns positional values).
+ */
+function coerceRow(fields: { name: string; dataTypeId: number }[], row: unknown[]): DbRow {
+  const out: DbRow = {};
+  for (let i = 0; i < row.length; i += 1) {
+    const v = row[i];
+    const t = fields[i]?.dataTypeId;
+    let value: unknown = v;
+    if (typeof v === "string" && (t === 20 || t === 1700)) {
+      const n = Number(v);
+      if (Number.isSafeInteger(n) || Number.isFinite(n)) value = n;
+    } else if (typeof v === "bigint") {
+      const n = Number(v);
+      value = Number.isSafeInteger(n) ? n : v.toString();
+    }
+    out[fields[i]?.name ?? String(i)] = value;
+  }
+  return out;
+}
+
+function makePgDb(execQuery: (sql: string, params: DbValue[]) => Promise<unknown>): Db {
+  const prepare = (sql: string): DbStatement => ({
+    async get(...params) {
+      return execQuery(sql, params).then((r) => (r as { rows: unknown[] }).rows[0]);
+    },
+    async all(...params) {
+      return execQuery(sql, params).then((r) => (r as { rows: unknown[] }).rows);
+    },
+    async run(...params) {
+      const r = (await execQuery(sql, params)) as { rowCount: number | null };
+      return { changes: r.rowCount ?? 0 };
+    },
+  });
+  return {
+    prepare,
+    exec: (sql) => execQuery(sql, []).then(() => undefined),
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    async tx(_fn) {
+      throw new Error(
+        "[zenframe] tx() is not available on the root pg Db — use the pooled transaction instance."
+      );
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* SQLite migrations (unchanged — development engine)                  */
 /* ------------------------------------------------------------------ */
 
 /** Columns of a table, used to make ADD COLUMN migrations idempotent. */
@@ -431,10 +762,10 @@ export function runMigrations(db: DatabaseSync): number {
 }
 
 /* ------------------------------------------------------------------ */
-/* Connection                                                          */
+/* SQLite driver (development)                                         */
 /* ------------------------------------------------------------------ */
 
-function openDb(): DatabaseSync {
+function openSqlite(): DatabaseSync {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
@@ -453,24 +784,197 @@ function openDb(): DatabaseSync {
   return db;
 }
 
-export function getDb(): DatabaseSync {
-  if (!globalThis.__zenframeDb) globalThis.__zenframeDb = openDb();
+function sqliteDb(): Db {
+  const get = (): DatabaseSync => {
+    if (!globalThis.__zenframeDb) globalThis.__zenframeDb = openSqlite();
+    return globalThis.__zenframeDb;
+  };
+  const inTx = () => Boolean(globalThis.__zenframeSqliteTxDepth);
+  return {
+    prepare(sql) {
+      const stmt = () => get().prepare(sql);
+      return {
+        async get(...params) {
+          return stmt().get(...params) as DbRow | undefined;
+        },
+        async all(...params) {
+          return stmt().all(...params) as DbRow[];
+        },
+        async run(...params) {
+          const res = stmt().run(...params);
+          return { changes: Number(res.changes ?? 0) };
+        },
+      };
+    },
+    async exec(sql) {
+      get().exec(sql);
+    },
+    async tx(fn) {
+      if (inTx()) {
+        throw new Error("[zenframe] Nested transactions are not supported.");
+      }
+      globalThis.__zenframeSqliteTxDepth = 1;
+      get().exec("BEGIN");
+      try {
+        const result = await fn(this);
+        get().exec("COMMIT");
+        return result;
+      } catch (err) {
+        try {
+          get().exec("ROLLBACK");
+        } catch {
+          /* already rolled back */
+        }
+        throw err;
+      } finally {
+        globalThis.__zenframeSqliteTxDepth = undefined;
+      }
+    },
+  };
+}
+
+declare global {
+  var __zenframeSqliteTxDepth: number | undefined;
+}
+
+/* ------------------------------------------------------------------ */
+/* PostgreSQL boot + connection                                        */
+/* ------------------------------------------------------------------ */
+
+/** Applies the idempotent baseline schema on first boot (fresh database). */
+async function ensurePgSchema(pool: import("pg").Pool): Promise<void> {
+  const client = await pool.connect();
+  try {
+    const exists = await client.query<{ present: unknown }>(
+      "SELECT to_regclass('public.users') AS present"
+    );
+    if (exists.rows[0]?.present) return; // schema already applied
+    await client.query(POSTGRES_BASELINE_SCHEMA);
+    await client.query(
+      `INSERT INTO schema_migrations (version, name, applied_at)
+       SELECT 1, 'postgres_baseline', $1
+       WHERE NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 1)`,
+      [nowIso()]
+    );
+  } finally {
+    client.release();
+  }
+}
+
+async function pgDb(): Promise<Db> {
+  if (!globalThis.__zenframePgPool) {
+    globalThis.__zenframePgPool = await createPgPool();
+  }
+  const pool = globalThis.__zenframePgPool;
+
+  if (!globalThis.__zenframePgReady) {
+    globalThis.__zenframePgReady = ensurePgSchema(pool);
+  }
+  await globalThis.__zenframePgReady;
+
+  /** Runs one statement on a pooled client, coercing numeric strings. */
+  const execQuery = async (sql: string, params: DbValue[]) => {
+    const client = await pool.connect();
+    try {
+      const text = toPgPlaceholders(sql);
+      const res = await client.query({
+        text,
+        values: params,
+        rowMode: "array",
+      });
+      const rows = res.rows.map((r) =>
+        coerceRow(
+          res.fields.map((f) => ({ name: f.name, dataTypeId: f.dataTypeID })),
+          r as unknown[]
+        )
+      );
+      return { rows, rowCount: res.rowCount };
+    } finally {
+      client.release();
+    }
+  };
+
+  const db = makePgDb(execQuery);
+  // The pooled instance can run multi-statement batches in one query too
+  // (simple query protocol), so exec maps through the same path.
+  return {
+    ...db,
+    async tx<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const txExec = async (sql: string, params: DbValue[]) => {
+          const text = toPgPlaceholders(sql);
+          const res = await client.query({ text, values: params, rowMode: "array" });
+          const rows = res.rows.map((r) =>
+            coerceRow(
+              res.fields.map((f) => ({ name: f.name, dataTypeId: f.dataTypeID })),
+              r as unknown[]
+            )
+          );
+          return { rows, rowCount: res.rowCount };
+        };
+        const txDb = makePgDb(txExec);
+        const result = await fn(txDb);
+        await client.query("COMMIT");
+        return result;
+      } catch (err) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          /* connection already broken */
+        }
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Public entrypoint                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Resolves the configured driver and returns its connection handle.
+ * Returns a Promise because PostgreSQL is inherently async; SQLite results
+ * are wrapped so call sites stay engine-agnostic.
+ */
+export async function getDb(): Promise<Db> {
+  const driver = resolveDriver();
+  if (driver === "postgres") return pgDb();
+  return sqliteDb();
+}
+
+/**
+ * Synchronous handle for development-only tooling (scripts, local checks).
+ * Throws under the postgres driver — production code must use `await getDb()`.
+ */
+export function getSqliteForTools(): DatabaseSync {
+  if (resolveDriver() !== "sqlite") {
+    throw new Error(
+      "[zenframe] getSqliteForTools() is only available with DATABASE_DRIVER=sqlite."
+    );
+  }
+  if (!globalThis.__zenframeDb) globalThis.__zenframeDb = openSqlite();
   return globalThis.__zenframeDb;
 }
 
 /* ------------------------------------------------------------------ */
-/* Backup                                                              */
+/* Backup (SQLite development engine)                                  */
 /* ------------------------------------------------------------------ */
 
 /**
  * Consistent hot backup via SQLite's own `VACUUM INTO` (safe while the app is
- * writing, unlike a raw file copy of a live WAL database).
+ * writing, unlike a raw file copy of a live WAL database). Postgres backups
+ * belong to the provider (Neon PITR / pg_dump) — see README.
  */
 export function backupDatabase(destDir = BACKUP_DIR): string {
   fs.mkdirSync(destDir, { recursive: true });
   const stamp = nowIso().replace(/[:.]/g, "-");
   const dest = path.join(destDir, `zenframe-${stamp}.db`);
-  const db = getDb();
+  const db = getSqliteForTools();
   db.prepare("VACUUM INTO ?").run(dest);
   return dest;
 }

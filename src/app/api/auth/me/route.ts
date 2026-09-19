@@ -10,11 +10,13 @@ export async function GET() {
     const user = await getCurrentUser();
     if (!user) return ok({ user: null });
 
-    const profile = getDb()
+    const db = await getDb();
+    const profile = (await db
       .prepare("SELECT bio, avatar_url FROM profiles WHERE user_id = ?")
-      .get(user.id) as { bio: string; avatar_url: string | null } | undefined;
+      .get(user.id)) as { bio: string; avatar_url: string | null } | undefined;
 
-    const entitlements = getEntitlements(user.id);
+    const entitlements = await getEntitlements(user.id);
+    const settings = await getSettings();
 
     return ok({
       user: {
@@ -28,7 +30,7 @@ export async function GET() {
         createdAt: user.created_at,
         plan: entitlements.planId,
         avatarUrl: profile?.avatar_url ?? null,
-        siteTagline: getSettings().hero_tagline,
+        siteTagline: settings.hero_tagline,
       },
     });
   } catch (err) {

@@ -6,7 +6,7 @@
  * Usage: npm run db:check
  */
 
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite"; // SQLite tooling — development only
 import fs from "node:fs";
 import path from "node:path";
 
@@ -21,6 +21,14 @@ if (!fs.existsSync(dbFile)) {
 }
 
 const db = new DatabaseSync(dbFile, { readOnly: true });
+if (process.env.NODE_ENV === "production") {
+  console.error(
+    "[zenframe] db:check inspects the local SQLite file and is a development " +
+      "tool. In production (Postgres) run database health checks against your " +
+      "provider (e.g. `psql \"$DATABASE_URL\" -c \"SELECT 1\"`) instead."
+  );
+  process.exit(1);
+}
 const q = (sql) => {
   try {
     return db.prepare(sql).all();

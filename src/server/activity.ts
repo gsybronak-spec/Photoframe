@@ -40,15 +40,16 @@ export interface ActivityRow {
   actor_id?: string | null;
 }
 
-export function logEvent(
+export async function logEvent(
   userId: string | null,
   type: ActivityType,
   message: string,
   meta: Record<string, unknown> = {},
   actorId: string | null = null
-) {
+): Promise<void> {
   try {
-    getDb()
+    const db = await getDb();
+    await db
       .prepare(
         `INSERT INTO activity (id, user_id, type, message, meta, created_at, actor_id)
          VALUES (?, ?, ?, ?, ?, ?, ?)`
@@ -71,13 +72,21 @@ export function logEvent(
   }
 }
 
-export function recentActivity(userId: string, limit = 8) {
-  return getDb()
+export async function recentActivity(userId: string, limit = 8): Promise<
+  {
+    id: string;
+    type: string;
+    message: string;
+    created_at: string;
+  }[]
+> {
+  const db = await getDb();
+  return (await db
     .prepare(
       `SELECT id, type, message, created_at FROM activity
        WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`
     )
-    .all(userId, limit) as {
+    .all(userId, limit)) as {
     id: string;
     type: string;
     message: string;
@@ -86,30 +95,32 @@ export function recentActivity(userId: string, limit = 8) {
 }
 
 /** Platform-wide feed for the admin panel (actor + subject, newest first). */
-export function systemActivity(limit = 25, offset = 0): ActivityRow[] {
-  return getDb()
+export async function systemActivity(limit = 25, offset = 0): Promise<ActivityRow[]> {
+  const db = await getDb();
+  return (await db
     .prepare(
       `SELECT a.id, a.user_id, a.actor_id, a.type, a.message, a.meta, a.created_at
        FROM activity a
        ORDER BY a.created_at DESC
        LIMIT ? OFFSET ?`
     )
-    .all(limit, offset) as ActivityRow[];
+    .all(limit, offset)) as ActivityRow[];
 }
 
-export function activityCount(): number {
-  return (
-    getDb().prepare("SELECT COUNT(*) AS n FROM activity").get() as { n: number }
-  ).n;
+export async function activityCount(): Promise<number> {
+  const db = await getDb();
+  return ((await db.prepare("SELECT COUNT(*) AS n FROM activity").get()) as { n: number })
+    .n;
 }
 
-export function authActivityCount(): number {
+export async function authActivityCount(): Promise<number> {
+  const db = await getDb();
   return (
-    getDb()
+    (await db
       .prepare(
         `SELECT COUNT(*) AS n FROM activity
          WHERE type IN ('signin','signout','signin_blocked','password_changed','password_reset','account_created')`
       )
-      .get() as { n: number }
+      .get()) as { n: number }
   ).n;
 }

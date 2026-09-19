@@ -107,9 +107,9 @@ const TESTIMONIALS = [
   },
 ];
 
-export default function HomePage() {
-  const site = getSettings();
-  const trending = getFeaturedFrames(site.featured_limit);
+export default async function HomePage() {
+  const site = await getSettings();
+  const trending = await getFeaturedFrames(site.featured_limit);
   const preview = trending.slice(0, 3).map((f) => svgToDataURI(buildThumbSVG(f)));
 
   const jsonLd = [

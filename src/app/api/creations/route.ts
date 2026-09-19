@@ -91,48 +91,46 @@ export async function GET(req: Request) {
       defaultLimit: 12,
       maxLimit: 48,
     });
-    const db = getDb();
+    const db = await getDb();
     const keyset = decodeCursor(cursor);
 
-    const rows = (
-      keyset
-        ? db
-            .prepare(
-              `SELECT id, frame_id, caption, bytes, thumb_bytes, thumb_path,
+    const rows = (await (keyset
+      ? db
+          .prepare(
+            `SELECT id, frame_id, caption, bytes, thumb_bytes, thumb_path,
                       visibility, share_slug, share_show_caption, created_at, updated_at
                FROM creations
                WHERE user_id = ? AND (created_at < ? OR (created_at = ? AND id < ?))
                ORDER BY created_at DESC, id DESC LIMIT ?`
-            )
-            .all(
-              user.id,
-              keyset.createdAt,
-              keyset.createdAt,
-              keyset.id,
-              limit + 1
-            )
-        : db
-            .prepare(
-              `SELECT id, frame_id, caption, bytes, thumb_bytes, thumb_path,
+          )
+          .all(
+            user.id,
+            keyset.createdAt,
+            keyset.createdAt,
+            keyset.id,
+            limit + 1
+          )
+      : db
+          .prepare(
+            `SELECT id, frame_id, caption, bytes, thumb_bytes, thumb_path,
                       visibility, share_slug, share_show_caption, created_at, updated_at
                FROM creations WHERE user_id = ?
                ORDER BY created_at DESC, id DESC LIMIT ?`
-            )
-            .all(user.id, limit + 1)
-    ) as CreationRow[];
+          )
+          .all(user.id, limit + 1))) as CreationRow[];
 
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
     const last = page[page.length - 1];
 
-    const totals = db
+    const totals = (await db
       .prepare(
         `SELECT COUNT(*) AS n,
                 COALESCE(SUM(bytes), 0) AS bytes,
                 COALESCE(SUM(CASE WHEN visibility = 'public' THEN 1 ELSE 0 END), 0) AS publicCount
          FROM creations WHERE user_id = ?`
       )
-      .get(user.id) as { n: number; bytes: number; publicCount: number };
+      .get(user.id)) as { n: number; bytes: number; publicCount: number };
 
     return ok({
       creations: page.map(toListItem),
@@ -168,10 +166,10 @@ export async function POST(req: Request) {
   try {
     const frameSlug = cleanSlug(body.frameSlug);
     if (!frameSlug) return fail("Which frame is this for?");
-    const frame = findAnyFrame(frameSlug);
+    const frame = await findAnyFrame(frameSlug);
     if (!frame) return fail("Unknown frame.", "NOT_FOUND");
 
-    const entitlements = getEntitlements(user.id);
+    const entitlements = await getEntitlements(user.id);
     if (!entitlements.canCreate) {
       return fail(
         `You've reached the ${entitlements.plan.name} plan limit of ${entitlements.plan.limits.creations} saved creations. Delete one to make room.`,
@@ -200,7 +198,7 @@ export async function POST(req: Request) {
       if (parsed && sniffed) thumb = { buf: parsed.buf, mime: sniffed };
     }
 
-    const db = getDb();
+    const db = await getDb();
     const id = generateToken(12);
     const caption = cleanCaption(body.caption) || null;
 
@@ -218,32 +216,36 @@ export async function POST(req: Request) {
 
     const now = nowIso();
     try {
-      db.prepare(
-        `INSERT INTO creations
+      await db.tx(async (tx) => {
+        await tx
+          .prepare(
+            `INSERT INTO creations
            (id, user_id, frame_id, caption, storage_path, mime_type, bytes,
             thumb_path, thumb_bytes, visibility, share_slug, share_show_caption,
             created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'private', NULL, 1, ?, ?)`
-      ).run(
-        id,
-        user.id,
-        frameSlug,
-        caption,
-        stored.key,
-        contentTypeFor(fullMime),
-        stored.bytes,
-        thumbKey,
-        thumbBytes,
-        now,
-        now
-      );
+          )
+          .run(
+            id,
+            user.id,
+            frameSlug,
+            caption,
+            stored.key,
+            contentTypeFor(fullMime),
+            stored.bytes,
+            thumbKey,
+            thumbBytes,
+            now,
+            now
+          );
+      });
     } catch (dbErr) {
       // Never leave orphaned files behind when the row can't be written.
       await deleteCreationObjects([fullKey, thumbKey]);
       throw dbErr;
     }
 
-    logEvent(user.id, "creation_saved", `Saved a creation using “${frame.title}”`, {
+    await logEvent(user.id, "creation_saved", `Saved a creation using “${frame.title}”`, {
       creationId: id,
     });
     track("creation_saved", {

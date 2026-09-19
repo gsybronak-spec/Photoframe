@@ -28,7 +28,7 @@ export async function GET(req: Request) {
     const rawPage = Number(url.searchParams.get("page"));
     const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
 
-    const rows = systemActivity(200, 0); // recent window, then filter in memory
+    const rows = await systemActivity(200, 0); // recent window, then filter in memory
     const filtered = rows.filter((r) => {
       if (filter === "auth") return AUTH_TYPES.has(r.type);
       if (filter === "creation") return r.type.startsWith("creation");
@@ -50,7 +50,7 @@ export async function GET(req: Request) {
       limit,
       total: filtered.length,
       pages: Math.max(1, Math.ceil(filtered.length / limit)),
-      totalLogged: activityCount(),
+      totalLogged: await activityCount(),
       filter,
     });
   } catch (err) {

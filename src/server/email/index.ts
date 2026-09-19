@@ -49,16 +49,17 @@ export function maskEmail(email: string): string {
   return `${head}${"*".repeat(Math.max(1, Math.min(local.length - 1, 6)))}@${domain}`;
 }
 
-function recordDelivery(input: {
+async function recordDelivery(input: {
   userId?: string | null;
   template: string;
   to: string;
   provider: string;
   status: string;
   detail?: string | null;
-}) {
+}): Promise<void> {
   try {
-    getDb()
+    const db = await getDb();
+    await db
       .prepare(
         `INSERT INTO email_deliveries
            (id, user_id, template, to_domain, provider, status, detail, created_at)
@@ -129,7 +130,7 @@ export async function sendTemplate(
   try {
     parts = renderTemplate(input.template, input.data);
   } catch (err) {
-    recordDelivery({
+    await recordDelivery({
       userId: input.userId,
       template: input.template,
       to: input.to,
@@ -158,7 +159,7 @@ export async function sendTemplate(
     result = await sendViaConsole(mail, input.template);
   }
 
-  recordDelivery({
+  await recordDelivery({
     userId: input.userId,
     template: input.template,
     to: input.to,
@@ -179,13 +180,14 @@ export async function sendTemplate(
 }
 
 /** Recent deliveries for the admin panel (no tokens, no full addresses). */
-export function recentEmailDeliveries(limit = 10) {
-  return getDb()
+export async function recentEmailDeliveries(limit = 10) {
+  const db = await getDb();
+  return (await db
     .prepare(
       `SELECT template, to_domain, provider, status, detail, created_at
        FROM email_deliveries ORDER BY created_at DESC LIMIT ?`
     )
-    .all(limit) as {
+    .all(limit)) as {
     template: string;
     to_domain: string;
     provider: string;

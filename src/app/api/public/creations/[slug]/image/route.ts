@@ -27,12 +27,13 @@ export async function GET(
       return fail("Not found", "NOT_FOUND");
     }
 
-    const row = getDb()
+    const db = await getDb();
+    const row = (await db
       .prepare(
         `SELECT id, mime_type, storage_path, bytes, published_at
          FROM creations WHERE share_slug = ? AND visibility = 'public'`
       )
-      .get(slug) as PublicRow | undefined;
+      .get(slug)) as PublicRow | undefined;
 
     if (!row) return fail("Not found", "NOT_FOUND");
 

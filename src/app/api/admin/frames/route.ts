@@ -7,7 +7,7 @@ export async function GET() {
   const { error } = await requireAdmin();
   if (error) return error;
   try {
-    const catalog = getCatalog();
+    const catalog = await getCatalog();
     return ok({
       frames: catalog.map((f) => ({
         slug: f.slug,
@@ -24,8 +24,8 @@ export async function GET() {
         updatedAt: f.updated_at ?? null,
       })),
       categories: OCCASIONS,
-      settings: getSettings(),
-      featured: featuredSlugs(),
+      settings: await getSettings(),
+      featured: await featuredSlugs(),
     });
   } catch (err) {
     return serverError("admin:frames", err);

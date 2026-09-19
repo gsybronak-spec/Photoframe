@@ -34,14 +34,14 @@ export async function GET(req: Request) {
       Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
     const offset = (page - 1) * limit;
 
-    const db = getDb();
+    const db = await getDb();
     const like = `%${q.toLowerCase()}%`;
     const where = q
       ? "WHERE lower(u.email) LIKE ? OR lower(u.name) LIKE ?"
       : "";
     const args: (string | number)[] = q ? [like, like] : [];
 
-    const rows = db
+    const rows = (await db
       .prepare(
         `SELECT u.id, u.email, u.name, u.role, COALESCE(u.status,'active') AS status,
                 u.email_verified_at, u.created_at,
@@ -53,12 +53,12 @@ export async function GET(req: Request) {
          ORDER BY u.created_at DESC
          LIMIT ? OFFSET ?`
       )
-      .all(...args, limit, offset) as UserRow[];
+      .all(...args, limit, offset)) as UserRow[];
 
     const total = (
-      db
+      (await db
         .prepare(`SELECT COUNT(*) AS n FROM users u ${where}`)
-        .get(...args) as { n: number }
+        .get(...args)) as { n: number }
     ).n;
 
     return ok({

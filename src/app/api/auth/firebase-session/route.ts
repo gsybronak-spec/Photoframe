@@ -35,7 +35,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const entitlements = getEntitlements(result.user.id);
+    const entitlements = await getEntitlements(result.user.id);
     return ok({
       user: {
         id: result.user.id,

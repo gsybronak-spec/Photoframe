@@ -25,14 +25,15 @@ interface PublicRow {
  * Nothing here can reach a private creation, and no account data (id, email,
  * name, activity) is ever selected.
  */
-function loadPublic(slug: string): PublicRow | null {
+async function loadPublic(slug: string): Promise<PublicRow | null> {
   if (!slug || slug.length > 64 || !/^[A-Za-z0-9_-]+$/.test(slug)) return null;
-  const row = getDb()
+  const db = await getDb();
+  const row = (await db
     .prepare(
       `SELECT id, frame_id, caption, share_show_caption, published_at
        FROM creations WHERE share_slug = ? AND visibility = 'public'`
     )
-    .get(slug) as PublicRow | undefined;
+    .get(slug)) as PublicRow | undefined;
   return row ?? null;
 }
 
@@ -42,11 +43,11 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const row = loadPublic(slug);
+  const row = await loadPublic(slug);
   if (!row) {
     return { title: "Shared frame not found", robots: NO_INDEX };
   }
-  const frame = findAnyFrame(row.frame_id);
+  const frame = await findAnyFrame(row.frame_id);
   const title = frame ? `${frame.title} — shared on ZenFrame` : "Shared on ZenFrame";
   const showCaption = row.share_show_caption !== 0 && Boolean(row.caption);
   const description = showCaption
@@ -82,10 +83,10 @@ export default async function PublicCreationPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const row = loadPublic(slug);
+  const row = await loadPublic(slug);
   if (!row) notFound();
 
-  const frame = findAnyFrame(row.frame_id);
+  const frame = await findAnyFrame(row.frame_id);
   const showCaption = row.share_show_caption !== 0 && Boolean(row.caption);
   const title = frame?.title ?? "Yoga frame";
   const image = `/api/public/creations/${slug}/image`;

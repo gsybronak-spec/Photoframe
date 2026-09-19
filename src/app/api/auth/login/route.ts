@@ -39,13 +39,13 @@ export async function POST(req: Request) {
   if (!isEmail(email) || !password) return fail("Enter your email and password.");
 
   try {
-    const db = getDb();
-    const row = db
+    const db = await getDb();
+    const row = (await db
       .prepare(
         `SELECT id, email, name, role, status, email_verified_at, password_hash
          FROM users WHERE email = ?`
       )
-      .get(email) as LoginRow | undefined;
+      .get(email)) as LoginRow | undefined;
 
     // One generic message for unknown email and wrong password: the endpoint
     // must not reveal whether an account exists.
@@ -54,18 +54,18 @@ export async function POST(req: Request) {
     if (!(await verifyPassword(password, row.password_hash))) return badCreds;
 
     if (row.status === "suspended") {
-      logEvent(row.id, "signin_blocked", "Sign-in blocked — account suspended");
+      await logEvent(row.id, "signin_blocked", "Sign-in blocked — account suspended");
       return fail(
         "This account is suspended. Contact the studio team if you think this is a mistake.",
         "FORBIDDEN"
       );
     }
 
-    await createSession(db, row.id, req);
-    logEvent(row.id, "signin", "Signed in");
+    await createSession(row.id, req);
+    await logEvent(row.id, "signin", "Signed in");
     track("login", { userId: row.id });
 
-    const entitlements = getEntitlements(row.id);
+    const entitlements = await getEntitlements(row.id);
     return ok({
       user: {
         id: row.id,

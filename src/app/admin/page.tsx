@@ -76,57 +76,59 @@ export default async function AdminPage({
   const raw = typeof sp.tab === "string" ? sp.tab : "overview";
   const tab: TabId = (TABS.find((t) => t.id === raw)?.id ?? "overview") as TabId;
 
-  const db = getDb();
-  const count = (sql: string, ...args: (string | number)[]): number =>
-    (db.prepare(sql).get(...args) as { n: number }).n;
+  const db = await getDb();
+  const count = async (
+    sql: string,
+    ...args: (string | number)[]
+  ): Promise<number> => ((await db.prepare(sql).get(...args)) as { n: number }).n;
 
   const since7 = cutoffIso(7);
-  const catalog = getCatalog();
+  const catalog = await getCatalog();
   const email = emailProviderStatus();
-  const plans = planBreakdown();
-  const analytics = analyticsSummary(30);
+  const plans = await planBreakdown();
+  const analytics = await analyticsSummary(30);
 
   const stats = [
-    { icon: Users, label: "Total users", value: count("SELECT COUNT(*) AS n FROM users") },
+    { icon: Users, label: "Total users", value: await count("SELECT COUNT(*) AS n FROM users") },
     {
       icon: MailCheck,
       label: "Verified users",
-      value: count(
+      value: await count(
         "SELECT COUNT(*) AS n FROM users WHERE email_verified_at IS NOT NULL"
       ),
     },
     {
       icon: Activity,
       label: "Active sessions",
-      value: count("SELECT COUNT(*) AS n FROM sessions WHERE expires_at > ?", nowIso()),
+      value: await count("SELECT COUNT(*) AS n FROM sessions WHERE expires_at > ?", nowIso()),
     },
-    { icon: Images, label: "Creations", value: count("SELECT COUNT(*) AS n FROM creations") },
+    { icon: Images, label: "Creations", value: await count("SELECT COUNT(*) AS n FROM creations") },
     {
       icon: HardDrive,
       label: "Storage used",
-      value: formatBytes(count("SELECT COALESCE(SUM(bytes),0) AS n FROM creations")),
+      value: formatBytes(await count("SELECT COALESCE(SUM(bytes),0) AS n FROM creations")),
     },
   ];
 
   const growth = [
-    { label: "New users · 7d", value: count("SELECT COUNT(*) AS n FROM users WHERE created_at >= ?", since7) },
-    { label: "New creations · 7d", value: count("SELECT COUNT(*) AS n FROM creations WHERE created_at >= ?", since7) },
+    { label: "New users · 7d", value: await count("SELECT COUNT(*) AS n FROM users WHERE created_at >= ?", since7) },
+    { label: "New creations · 7d", value: await count("SELECT COUNT(*) AS n FROM creations WHERE created_at >= ?", since7) },
     {
       label: "Active users · 7d",
-      value: count(
+      value: await count(
         "SELECT COUNT(DISTINCT user_id) AS n FROM sessions WHERE last_seen_at >= ?",
         since7
       ),
     },
     {
       label: "Public share links",
-      value: count("SELECT COUNT(*) AS n FROM creations WHERE visibility = 'public'"),
+      value: await count("SELECT COUNT(*) AS n FROM creations WHERE visibility = 'public'"),
     },
-    { icon: BookmarkCheck, label: "Saved frames", value: count("SELECT COUNT(*) AS n FROM saved_frames") },
+    { icon: BookmarkCheck, label: "Saved frames", value: await count("SELECT COUNT(*) AS n FROM saved_frames") },
   ];
 
-  const recent = systemActivity(8);
-  const deliveries = recentEmailDeliveries(5);
+  const recent = await systemActivity(8);
+  const deliveries = await recentEmailDeliveries(5);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6">
@@ -139,7 +141,7 @@ export default async function AdminPage({
             <div>
               <h1 className="font-display text-3xl font-semibold text-ink">Studio admin</h1>
               <p className="text-sm text-ink-soft">
-                Platform operations — {getSettings().hero_tagline}.
+                Platform operations — {(await getSettings()).hero_tagline}.
               </p>
             </div>
           </div>
@@ -217,9 +219,9 @@ export default async function AdminPage({
                     <div className="flex items-center justify-between gap-3">
                       <dt className="text-ink-soft">Audit events logged</dt>
                       <dd className="font-semibold text-ink">
-                        {activityCount()}{" "}
+                        {await activityCount()}{" "}
                         <span className="text-xs font-normal text-ink-soft">
-                          ({authActivityCount()} auth)
+                          ({await authActivityCount()} auth)
                         </span>
                       </dd>
                     </div>

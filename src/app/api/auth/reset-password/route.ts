@@ -20,13 +20,13 @@ export async function POST(req: Request) {
   if (problems.length) return fail(`Password needs ${problems.join(", ")}.`);
 
   try {
-    const db = getDb();
-    const row = db
+    const db = await getDb();
+    const row = (await db
       .prepare(
         `SELECT id, user_id, expires_at, used_at FROM verification_tokens
          WHERE token_hash = ? AND kind = 'password_reset'`
       )
-      .get(sha256(token)) as
+      .get(sha256(token))) as
       | { id: string; user_id: string; expires_at: string; used_at: string | null }
       | undefined;
 
@@ -38,23 +38,26 @@ export async function POST(req: Request) {
     }
 
     const now = nowIso();
-    db.prepare("UPDATE verification_tokens SET used_at = ? WHERE id = ?").run(
-      now,
-      row.id
-    );
-    db.prepare(
-      "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?"
-    ).run(await hashPassword(password), now, row.user_id);
+    const passwordHash = await hashPassword(password);
 
-    // A password change invalidates every session: an attacker holding a stolen
-    // cookie loses access immediately.
+    // Token consumption + password change are one atomic unit; the password
+    // change then invalidates every session (stolen cookies die immediately).
+    await db.tx(async (tx) => {
+      await tx.prepare("UPDATE verification_tokens SET used_at = ? WHERE id = ?").run(
+        now,
+        row.id
+      );
+      await tx
+        .prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?")
+        .run(passwordHash, now, row.user_id);
+    });
     await revokeAllSessions(row.user_id);
 
-    const user = db
+    const user = (await db
       .prepare("SELECT email, name FROM users WHERE id = ?")
-      .get(row.user_id) as { email: string; name: string } | undefined;
+      .get(row.user_id)) as { email: string; name: string } | undefined;
 
-    logEvent(row.user_id, "password_reset", "Password reset via emailed link");
+    await logEvent(row.user_id, "password_reset", "Password reset via emailed link");
 
     if (user) {
       await sendTemplatedEmail({

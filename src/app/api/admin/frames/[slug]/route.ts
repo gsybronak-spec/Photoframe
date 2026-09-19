@@ -51,10 +51,10 @@ export async function PATCH(
       patch.tags = tags;
     }
 
-    const updated = updateFrame(safeSlug, patch, admin.id);
+    const updated = await updateFrame(safeSlug, patch, admin.id);
     if (!updated) return fail("Unknown frame.", "NOT_FOUND");
 
-    logEvent(
+    await logEvent(
       admin.id,
       "admin_action",
       `Updated frame “${updated.title}”`,

@@ -24,7 +24,7 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const frame = findFrame(slug, { includeInactive: true });
+  const frame = await findFrame(slug, { includeInactive: true });
   if (!frame) return {};
 
   const title = `${frame.title} — Yoga Photo Frame`;
@@ -66,10 +66,10 @@ export default async function FramePage({
 }) {
   const { slug } = await params;
   // Inactive frames are hidden from the public site entirely.
-  const frame = findFrame(slug);
+  const frame = await findFrame(slug);
   if (!frame) notFound();
 
-  const related = getPublicFrames()
+  const related = (await getPublicFrames())
     .filter((f) => f.category === frame.category && f.slug !== frame.slug)
     .slice(0, 4);
 

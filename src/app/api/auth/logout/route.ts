@@ -1,4 +1,3 @@
-import { getDb } from "@/server/db";
 import {
   destroySession,
   getCurrentUser,
@@ -19,12 +18,12 @@ export async function POST(req: Request) {
     const all = new URL(req.url).searchParams.get("all") === "1";
 
     if (user) {
-      logEvent(user.id, "signout", all ? "Signed out of all devices" : "Signed out");
+      await logEvent(user.id, "signout", all ? "Signed out of all devices" : "Signed out");
       track("logout", { userId: user.id, props: { all } });
     }
 
     if (all && user) await revokeAllSessions(user.id);
-    await destroySession(getDb());
+    await destroySession();
 
     return ok({
       message: all ? "Signed out of all devices" : "Signed out",

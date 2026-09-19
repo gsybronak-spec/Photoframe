@@ -39,12 +39,12 @@ export async function PATCH(
     const targetId = cleanId(id);
     if (!targetId) return fail("User not found.", "NOT_FOUND");
 
-    const db = getDb();
-    const target = db
+    const db = await getDb();
+    const target = (await db
       .prepare(
         "SELECT id, email, name, role, COALESCE(status,'active') AS status FROM users WHERE id = ?"
       )
-      .get(targetId) as TargetRow | undefined;
+      .get(targetId)) as TargetRow | undefined;
     if (!target) return fail("User not found.", "NOT_FOUND");
 
     const nextRole: "admin" | "user" | undefined =
@@ -67,9 +67,9 @@ export async function PATCH(
 
     if (nextRole === "user" && target.role === "admin") {
       const admins = (
-        db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").get() as {
-          n: number;
-        }
+        (await db
+          .prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'")
+          .get()) as { n: number }
       ).n;
       if (admins <= 1) return fail("At least one admin must remain.", "FORBIDDEN");
     }
@@ -78,13 +78,13 @@ export async function PATCH(
     const changes: string[] = [];
 
     if (nextRole && nextRole !== target.role) {
-      db.prepare("UPDATE users SET role = ?, updated_at = ? WHERE id = ?").run(
+      await db.prepare("UPDATE users SET role = ?, updated_at = ? WHERE id = ?").run(
         nextRole,
         now,
         target.id
       );
       changes.push(`role ${target.role} → ${nextRole}`);
-      logEvent(
+      await logEvent(
         target.id,
         "admin_action",
         `Role changed to ${nextRole} by an admin`,
@@ -94,16 +94,18 @@ export async function PATCH(
     }
 
     if (nextStatus && nextStatus !== target.status) {
-      db.prepare(
-        "UPDATE users SET status = ?, disabled_at = ?, updated_at = ? WHERE id = ?"
-      ).run(nextStatus, nextStatus === "suspended" ? now : null, now, target.id);
+      await db
+        .prepare(
+          "UPDATE users SET status = ?, disabled_at = ?, updated_at = ? WHERE id = ?"
+        )
+        .run(nextStatus, nextStatus === "suspended" ? now : null, now, target.id);
       changes.push(`status ${target.status} → ${nextStatus}`);
 
       if (nextStatus === "suspended") {
         // Suspension takes effect immediately — every device is signed out.
         await revokeAllSessions(target.id);
       }
-      logEvent(
+      await logEvent(
         target.id,
         "admin_action",
         `Account ${nextStatus === "suspended" ? "suspended" : "reactivated"} by an admin`,
@@ -112,11 +114,11 @@ export async function PATCH(
       );
     }
 
-    const updated = db
+    const updated = (await db
       .prepare(
         "SELECT id, role, COALESCE(status,'active') AS status FROM users WHERE id = ?"
       )
-      .get(target.id) as { id: string; role: string; status: string };
+      .get(target.id)) as { id: string; role: string; status: string };
 
     return ok({
       user: { id: updated.id, role: updated.role, status: updated.status },

@@ -6,7 +6,7 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://zenframe.in";
 /** Regenerated hourly so admin catalogue changes flow into the sitemap. */
 export const revalidate = 3600;
 
-export default function sitemap(): MetadataRoute.Sitemap {
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
   const page = (
     path: string,
@@ -20,7 +20,7 @@ export default function sitemap(): MetadataRoute.Sitemap {
   });
 
   // Only active frames are advertised (inactive ones 404 by design).
-  const frames = getPublicFrames().map((f) => page(`/frames/${f.slug}`, 0.8));
+  const frames = (await getPublicFrames()).map((f) => page(`/frames/${f.slug}`, 0.8));
 
   return [
     page("/", 1, "daily"),

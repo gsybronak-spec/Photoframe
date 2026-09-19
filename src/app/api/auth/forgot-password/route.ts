@@ -22,32 +22,36 @@ export async function POST(req: Request) {
   };
 
   try {
-    const db = getDb();
-    const user = db.prepare("SELECT id, name FROM users WHERE email = ?").get(email) as
-      | { id: string; name: string }
-      | undefined;
+    const db = await getDb();
+    const user = (await db
+      .prepare("SELECT id, name FROM users WHERE email = ?")
+      .get(email)) as { id: string; name: string } | undefined;
 
     // Always the same response shape and status, whether or not the account
     // exists — this endpoint must never be usable for account enumeration.
     if (!user) return ok(generic);
 
     // Invalidate previous outstanding reset links, then issue one.
-    db.prepare(
-      `UPDATE verification_tokens SET used_at = ?
+    await db
+      .prepare(
+        `UPDATE verification_tokens SET used_at = ?
        WHERE user_id = ? AND kind = 'password_reset' AND used_at IS NULL`
-    ).run(nowIso(), user.id);
+      )
+      .run(nowIso(), user.id);
 
     const token = generateToken(32);
-    db.prepare(
-      `INSERT INTO verification_tokens (id, user_id, kind, token_hash, expires_at, created_at)
+    await db
+      .prepare(
+        `INSERT INTO verification_tokens (id, user_id, kind, token_hash, expires_at, created_at)
        VALUES (?, ?, 'password_reset', ?, ?, ?)`
-    ).run(
-      generateToken(12),
-      user.id,
-      sha256(token),
-      new Date(Date.now() + RESET_TTL_MINUTES * 60e3).toISOString(),
-      nowIso()
-    );
+      )
+      .run(
+        generateToken(12),
+        user.id,
+        sha256(token),
+        new Date(Date.now() + RESET_TTL_MINUTES * 60e3).toISOString(),
+        nowIso()
+      );
 
     await sendTemplatedEmail({
       template: "password_reset",

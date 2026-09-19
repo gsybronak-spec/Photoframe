@@ -25,12 +25,13 @@ export default async function OpenGraphImage({
   let occasion: string | null = null;
 
   if (slug && slug.length <= 64 && /^[A-Za-z0-9_-]+$/.test(slug)) {
-    const row = getDb()
+    const db = await getDb();
+    const row = (await db
       .prepare(
         `SELECT frame_id, caption, share_show_caption, storage_path, mime_type
          FROM creations WHERE share_slug = ? AND visibility = 'public'`
       )
-      .get(slug) as
+      .get(slug)) as
       | {
           frame_id: string;
           caption: string | null;
@@ -41,7 +42,7 @@ export default async function OpenGraphImage({
       | undefined;
 
     if (row) {
-      const frame = findAnyFrame(row.frame_id);
+      const frame = await findAnyFrame(row.frame_id);
       title = frame?.title ?? "Yoga frame";
       occasion = frame?.occasion ?? null;
       caption = row.share_show_caption !== 0 ? row.caption : null;

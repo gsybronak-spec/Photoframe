@@ -16,15 +16,16 @@ export default async function SettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login?next=/settings");
 
-  const profile = getDb()
+  const db = await getDb();
+  const profile = (await db
     .prepare("SELECT bio, studio, avatar_url FROM profiles WHERE user_id = ?")
-    .get(user.id) as
+    .get(user.id)) as
     | { bio: string; studio: string | null; avatar_url: string | null }
     | undefined;
 
-  const entitlements = getEntitlements(user.id);
+  const entitlements = await getEntitlements(user.id);
   const sessions = await listSessions(user.id);
-  const site = getSettings();
+  const site = await getSettings();
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-12 sm:px-6">

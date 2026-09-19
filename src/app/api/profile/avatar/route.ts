@@ -50,7 +50,8 @@ export async function POST(req: Request) {
     await putImage(key, parsed.buf);
 
     const url = `/api/profile/avatar?v=${Date.now()}`;
-    getDb()
+    const db = await getDb();
+    await db
       .prepare(
         `INSERT INTO profiles (user_id, bio, avatar_url, updated_at) VALUES (?, '', ?, ?)
          ON CONFLICT(user_id) DO UPDATE SET avatar_url = excluded.avatar_url,
@@ -58,7 +59,7 @@ export async function POST(req: Request) {
       )
       .run(user.id, url, nowIso());
 
-    logEvent(user.id, "profile_updated", "Updated profile photo");
+    await logEvent(user.id, "profile_updated", "Updated profile photo");
     return ok({ avatarUrl: url });
   } catch (err) {
     return serverError("profile:avatar", err);
@@ -71,9 +72,10 @@ export async function GET() {
     const user = await getCurrentUser();
     if (!user) return fail("Sign in required", "UNAUTHORIZED");
 
-    const profile = getDb()
+    const db = await getDb();
+    const profile = (await db
       .prepare("SELECT avatar_url FROM profiles WHERE user_id = ?")
-      .get(user.id) as { avatar_url: string | null } | undefined;
+      .get(user.id)) as { avatar_url: string | null } | undefined;
     if (!profile?.avatar_url) return fail("No avatar", "NOT_FOUND");
 
     for (const ext of ["jpg", "png", "webp"] as const) {
@@ -105,7 +107,8 @@ export async function DELETE(req: Request) {
       avatarKey(user.id, "png"),
       avatarKey(user.id, "webp"),
     ]);
-    getDb()
+    const db = await getDb();
+    await db
       .prepare("UPDATE profiles SET avatar_url = NULL, updated_at = ? WHERE user_id = ?")
       .run(nowIso(), user.id);
     return ok({ avatarUrl: null });

@@ -9,6 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:api": "node scripts/smoke.mjs",
+    "test:postgres": "node scripts/test-postgres.mjs",
     "test:manifest": "node scripts/audit-cleanup.mjs",
     "make-icons": "node scripts/make-icons.mjs",
     "db:check": "node scripts/db-check.mjs",
@@ -29,6 +30,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

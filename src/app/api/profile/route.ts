@@ -20,12 +20,13 @@ export async function GET() {
   const { user, error } = await requireUser();
   if (error) return error;
   try {
-    const profile = getDb()
+    const db = await getDb();
+    const profile = (await db
       .prepare("SELECT bio, avatar_url, studio FROM profiles WHERE user_id = ?")
-      .get(user.id) as
+      .get(user.id)) as
       | { bio: string; avatar_url: string | null; studio: string | null }
       | undefined;
-    const entitlements = getEntitlements(user.id);
+    const entitlements = await getEntitlements(user.id);
     return ok({
       profile: {
         id: user.id,
@@ -71,22 +72,25 @@ export async function PATCH(req: Request) {
     const bio = cleanMultiline(body.bio, 280);
     const studio = cleanText(body.studio, 80);
     const now = nowIso();
-    const db = getDb();
+    const db = await getDb();
 
-    if (body.name !== undefined) {
-      db.prepare("UPDATE users SET name = ?, updated_at = ? WHERE id = ?").run(
-        name,
-        now,
-        user.id
-      );
-    }
-    db.prepare(
-      `INSERT INTO profiles (user_id, bio, studio, updated_at) VALUES (?, ?, ?, ?)
+    // User rename + profile upsert land together or not at all.
+    await db.tx(async (tx) => {
+      if (body.name !== undefined) {
+        await tx
+          .prepare("UPDATE users SET name = ?, updated_at = ? WHERE id = ?")
+          .run(name, now, user.id);
+      }
+      await tx
+        .prepare(
+          `INSERT INTO profiles (user_id, bio, studio, updated_at) VALUES (?, ?, ?, ?)
        ON CONFLICT(user_id) DO UPDATE SET bio = excluded.bio,
          studio = excluded.studio, updated_at = excluded.updated_at`
-    ).run(user.id, bio, studio || null, now);
+        )
+        .run(user.id, bio, studio || null, now);
+    });
 
-    logEvent(user.id, "profile_updated", "Updated profile details");
+    await logEvent(user.id, "profile_updated", "Updated profile details");
     return ok({ profile: { name: body.name !== undefined ? name : user.name, bio, studio } });
   } catch (err) {
     return serverError("profile:patch", err);
@@ -117,23 +121,23 @@ export async function DELETE(req: Request) {
   if (!body.password) return fail("Enter your password to confirm.", "BAD_REQUEST");
 
   try {
-    const db = getDb();
-    const row = db
+    const db = await getDb();
+    const row = (await db
       .prepare("SELECT password_hash FROM users WHERE id = ?")
-      .get(user.id) as { password_hash: string } | undefined;
+      .get(user.id)) as { password_hash: string } | undefined;
     if (!row) return fail("Account not found.", "NOT_FOUND");
     if (!(await verifyPassword(body.password, row.password_hash))) {
       return fail("That password is incorrect.", "FORBIDDEN");
     }
 
-    const files = db
+    const files = (await db
       .prepare(
         "SELECT storage_path, thumb_path FROM creations WHERE user_id = ?"
       )
-      .all(user.id) as { storage_path: string; thumb_path: string | null }[];
+      .all(user.id)) as { storage_path: string; thumb_path: string | null }[];
 
     // Audit before the row disappears (activity.user_id cascades on delete).
-    logEvent(
+    await logEvent(
       null,
       "account_deleted",
       "Account deleted by the account owner",
@@ -141,7 +145,7 @@ export async function DELETE(req: Request) {
       user.id
     );
 
-    db.prepare("DELETE FROM users WHERE id = ?").run(user.id); // cascades
+    await db.prepare("DELETE FROM users WHERE id = ?").run(user.id); // cascades
     await revokeAllSessions(user.id);
     await deleteCreationObjects(
       files.flatMap((f) => [f.storage_path, f.thumb_path])

@@ -18,27 +18,26 @@ export async function POST(
   try {
     const { slug } = await params;
     const safeSlug = cleanSlug(slug);
-    const frame = safeSlug ? findAnyFrame(safeSlug) : undefined;
+    const frame = safeSlug ? await findAnyFrame(safeSlug) : undefined;
     if (!frame) return fail("Unknown frame.", "NOT_FOUND");
 
-    const db = getDb();
-    const existing = db
+    const db = await getDb();
+    const existing = await db
       .prepare("SELECT 1 AS x FROM saved_frames WHERE user_id = ? AND frame_id = ?")
       .get(user.id, frame.slug);
 
     if (existing) {
-      db.prepare("DELETE FROM saved_frames WHERE user_id = ? AND frame_id = ?").run(
-        user.id,
-        frame.slug
-      );
-      logEvent(user.id, "frame_unfavorited", `Removed “${frame.title}” from saved frames`);
+      await db
+        .prepare("DELETE FROM saved_frames WHERE user_id = ? AND frame_id = ?")
+        .run(user.id, frame.slug);
+      await logEvent(user.id, "frame_unfavorited", `Removed “${frame.title}” from saved frames`);
       return ok({ saved: false });
     }
 
-    db.prepare(
-      "INSERT INTO saved_frames (user_id, frame_id, created_at) VALUES (?, ?, ?)"
-    ).run(user.id, frame.slug, nowIso());
-    logEvent(user.id, "frame_favorited", `Saved “${frame.title}” to your frames`);
+    await db
+      .prepare("INSERT INTO saved_frames (user_id, frame_id, created_at) VALUES (?, ?, ?)")
+      .run(user.id, frame.slug, nowIso());
+    await logEvent(user.id, "frame_favorited", `Saved “${frame.title}” to your frames`);
     return ok({ saved: true });
   } catch (err) {
     return serverError("frame:favorite", err);

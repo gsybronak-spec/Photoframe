@@ -12,45 +12,59 @@ export async function GET() {
   if (error) return error;
 
   try {
-    const db = getDb();
-    const count = (sql: string, ...args: (string | number)[]): number =>
-      (db.prepare(sql).get(...args) as { n: number }).n;
+    const db = await getDb();
+    const count = async (
+      sql: string,
+      ...args: (string | number)[]
+    ): Promise<number> => ((await db.prepare(sql).get(...args)) as { n: number }).n;
 
     const since7 = new Date(Date.now() - 7 * 86400e3).toISOString();
     const since30 = new Date(Date.now() - 30 * 86400e3).toISOString();
 
-    const catalog = getCatalog();
+    const catalog = await getCatalog();
+    const activity = {
+      total: await activityCount(),
+      authEvents: await authActivityCount(),
+      recent: await systemActivity(8),
+    };
+    const plans = await planBreakdown();
+    const analytics = {
+      total: await analyticsTotal(),
+      byEvent: await analyticsSummary(30),
+    };
+    const settings = await getSettings();
+    const email = { ...emailProviderStatus(), recent: await recentEmailDeliveries(5) };
 
     return ok({
       admin: { id: user.id, name: user.name },
       stats: {
-        users: count("SELECT COUNT(*) AS n FROM users"),
-        verifiedUsers: count(
+        users: await count("SELECT COUNT(*) AS n FROM users"),
+        verifiedUsers: await count(
           "SELECT COUNT(*) AS n FROM users WHERE email_verified_at IS NOT NULL"
         ),
-        suspendedUsers: count(
+        suspendedUsers: await count(
           "SELECT COUNT(*) AS n FROM users WHERE status = 'suspended'"
         ),
-        newUsers7d: count("SELECT COUNT(*) AS n FROM users WHERE created_at >= ?", since7),
-        newUsers30d: count("SELECT COUNT(*) AS n FROM users WHERE created_at >= ?", since30),
-        creations: count("SELECT COUNT(*) AS n FROM creations"),
-        creations7d: count(
+        newUsers7d: await count("SELECT COUNT(*) AS n FROM users WHERE created_at >= ?", since7),
+        newUsers30d: await count("SELECT COUNT(*) AS n FROM users WHERE created_at >= ?", since30),
+        creations: await count("SELECT COUNT(*) AS n FROM creations"),
+        creations7d: await count(
           "SELECT COUNT(*) AS n FROM creations WHERE created_at >= ?",
           since7
         ),
-        publicCreations: count(
+        publicCreations: await count(
           "SELECT COUNT(*) AS n FROM creations WHERE visibility = 'public'"
         ),
-        savedFrames: count("SELECT COUNT(*) AS n FROM saved_frames"),
-        activeSessions: count(
+        savedFrames: await count("SELECT COUNT(*) AS n FROM saved_frames"),
+        activeSessions: await count(
           "SELECT COUNT(*) AS n FROM sessions WHERE expires_at > ?",
           nowIso()
         ),
-        activeUsers7d: count(
+        activeUsers7d: await count(
           "SELECT COUNT(DISTINCT user_id) AS n FROM sessions WHERE last_seen_at >= ?",
           since7
         ),
-        storageBytes: count("SELECT COALESCE(SUM(bytes), 0) AS n FROM creations"),
+        storageBytes: await count("SELECT COALESCE(SUM(bytes), 0) AS n FROM creations"),
       },
       frames: {
         total: catalog.length,
@@ -58,15 +72,11 @@ export async function GET() {
         featured: catalog.filter((f) => f.featured).length,
         overridden: catalog.filter((f) => f.overridden).length,
       },
-      activity: {
-        total: activityCount(),
-        authEvents: authActivityCount(),
-        recent: systemActivity(8),
-      },
-      plans: planBreakdown(),
-      analytics: { total: analyticsTotal(), byEvent: analyticsSummary(30) },
-      email: { ...emailProviderStatus(), recent: recentEmailDeliveries(5) },
-      settings: getSettings(),
+      activity,
+      plans,
+      analytics,
+      email,
+      settings,
     });
   } catch (err) {
     return serverError("admin:overview", err);

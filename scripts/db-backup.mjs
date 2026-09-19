@@ -11,7 +11,7 @@
  *         npm run db:backup -- --keep 7 --dir /mnt/backups
  */
 
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite"; // SQLite tooling — development only
 import fs from "node:fs";
 import path from "node:path";
 
@@ -38,6 +38,14 @@ const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const dest = path.join(outDir, `zenframe-${stamp}.db`);
 
 const db = new DatabaseSync(dbFile, { readOnly: false });
+if (process.env.NODE_ENV === "production") {
+  console.error(
+    "[zenframe] db:backup uses SQLite VACUUM INTO and is a development tool. " +
+      "In production (Postgres) use your provider's backup system (Neon PITR " +
+      "or `pg_dump \"$DATABASE_URL\" > backup.sql`)."
+  );
+  process.exit(1);
+}
 try {
   db.prepare("VACUUM INTO ?").run(dest);
 } finally {

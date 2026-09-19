@@ -37,8 +37,8 @@ export const metadata: Metadata = {
   },
 };
 
-export default function FramesPage() {
-  const frames = getPublicFrames();
+export default async function FramesPage() {
+  const frames = await getPublicFrames();
 
   const jsonLd = {
     "@context": "https://schema.org",

@@ -42,33 +42,39 @@ export async function POST(req: Request) {
   if (problems.length) return fail(`Password needs ${problems.join(", ")}.`);
 
   try {
-    const db = getDb();
-    const existing = db.prepare("SELECT id FROM users WHERE email = ?").get(email);
+    const db = await getDb();
+    const existing = await db.prepare("SELECT id FROM users WHERE email = ?").get(email);
     if (existing) return fail("An account with this email already exists.", "CONFLICT");
 
     const id = generateToken(12);
     const now = nowIso();
-    db.prepare(
-      `INSERT INTO users (id, email, name, password_hash, role, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'user', 'active', ?, ?)`
-    ).run(id, email, name, await hashPassword(password), now, now);
-    db.prepare("INSERT INTO profiles (user_id, bio, updated_at) VALUES (?, '', ?)").run(
-      id,
-      now
-    );
+    const passwordHash = await hashPassword(password);
+    const verifyToken = generateToken(32);
 
-    // New accounts start unverified — saving/sharing unlocks after verification.
-    const token = generateToken(32);
-    db.prepare(
-      `INSERT INTO verification_tokens (id, user_id, kind, token_hash, expires_at, created_at)
+    // Account + profile + verification token land together or not at all.
+    await db.tx(async (tx) => {
+      await tx
+        .prepare(
+          `INSERT INTO users (id, email, name, password_hash, role, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'user', 'active', ?, ?)`
+        )
+        .run(id, email, name, passwordHash, now, now);
+      await tx
+        .prepare("INSERT INTO profiles (user_id, bio, updated_at) VALUES (?, '', ?)")
+        .run(id, now);
+      await tx
+        .prepare(
+          `INSERT INTO verification_tokens (id, user_id, kind, token_hash, expires_at, created_at)
        VALUES (?, ?, 'verify_email', ?, ?, ?)`
-    ).run(
-      generateToken(12),
-      id,
-      sha256(token),
-      new Date(Date.now() + VERIFY_TTL_HOURS * 3600e3).toISOString(),
-      now
-    );
+        )
+        .run(
+          generateToken(12),
+          id,
+          sha256(verifyToken),
+          new Date(Date.now() + VERIFY_TTL_HOURS * 3600e3).toISOString(),
+          now
+        );
+    });
 
     const origin = new URL(req.url).origin;
     const delivery = await sendTemplatedEmail({
@@ -77,14 +83,14 @@ export async function POST(req: Request) {
       userId: id,
       data: {
         name,
-        url: `${origin}/verify-email?token=${token}`,
+        url: `${origin}/verify-email?token=${verifyToken}`,
         hours: String(VERIFY_TTL_HOURS),
       },
     });
 
-    logEvent(id, "account_created", "Welcome to ZenFrame — account created");
+    await logEvent(id, "account_created", "Welcome to ZenFrame — account created");
     track("signup", { userId: id, props: { plan: "free" } });
-    await createSession(db, id, req);
+    await createSession(id, req);
 
     return ok(
       {

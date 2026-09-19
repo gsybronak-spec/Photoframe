@@ -72,9 +72,10 @@ export function validateProductionConfig(): void {
 
   if (isProd && !process.env.ZENFRAME_DATA_DIR) {
     problems.push(
-      "ZENFRAME_DATA_DIR is not set. The database and uploads default to " +
-        "<project>/data, which is EPHEMERAL on most hosts — all user data will " +
-        "be lost on redeploy. Point it at a persistent volume."
+      "ZENFRAME_DATA_DIR is not set. The local SQLite database and uploads default " +
+        "to <project>/data, which is EPHEMERAL on most hosts. Production data lives " +
+        "in PostgreSQL (DATABASE_URL) and Vercel Blob (STORAGE_DRIVER=blob); set " +
+        "ZENFRAME_DATA_DIR only for local development."
     );
   }
   try {
@@ -129,13 +130,37 @@ export function validateProductionConfig(): void {
     );
   }
 
-  /* --- Database (Vercel serverless is ephemeral) -------------------------- */
+  /* --- Database driver (deterministic; SQLite refused in production) ------ */
+  const dbDriver = (process.env.DATABASE_DRIVER ?? "").trim().toLowerCase();
+  if (dbDriver && !["sqlite", "postgres"].includes(dbDriver)) {
+    problems.push(
+      `DATABASE_DRIVER="${dbDriver}" is invalid — use "sqlite" (development) or "postgres" (production).`
+    );
+  }
+  if (dbDriver === "sqlite" && isProd) {
+    problems.push(
+      'DATABASE_DRIVER=sqlite is not allowed in production. Set DATABASE_URL ' +
+        '(Neon/managed Postgres) — SQLite is development-only.'
+    );
+  }
+  if (isProd && !process.env.DATABASE_URL) {
+    problems.push(
+      "DATABASE_URL is not set. Production requires PostgreSQL (Neon/managed " +
+        "Postgres) — the app refuses to boot SQLite in production, so requests " +
+        "will fail. Apply db/schema-postgres.sql to the database first."
+    );
+  }
+  if (!isProd && !process.env.DATABASE_URL && dbDriver !== "postgres") {
+    info("database: local SQLite (development mode)");
+  }
+
+  /* --- Data directory (SQLite/uploads only — NOT the production DB) ------- */
   if (isProd && process.env.ZENFRAME_DATA_DIR &&
       /\/(var|tmp)\/|\/home\/|C:\\Users|vercel/i.test(process.env.ZENFRAME_DATA_DIR)) {
     problems.push(
       "ZENFRAME_DATA_DIR looks ephemeral. On Vercel the function filesystem does " +
-        "not persist: run production against PostgreSQL (DATABASE_URL + the " +
-        "Postgres adapter) and Vercel Blob (STORAGE_DRIVER=blob), not SQLite on disk."
+        "not persist: run production against PostgreSQL (DATABASE_URL) and Vercel " +
+        "Blob (STORAGE_DRIVER=blob)."
     );
   }
 

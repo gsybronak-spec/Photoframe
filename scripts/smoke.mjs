@@ -170,6 +170,8 @@ function startServer() {
       ...process.env,
       NODE_ENV: "production",
       ZENFRAME_DATA_DIR: DATA_DIR,
+      DATABASE_DRIVER: "sqlite", // test-only: suite runs against a throwaway SQLite DB
+      ZENFRAME_ALLOW_TEST_SQLITE: "1", // test-only: bypasses the production Postgres guard
       ALLOW_DEV_MAIL_LOG: "1", // test-only: makes verification links readable
       NEXT_PUBLIC_SITE_URL: BASE,
     },

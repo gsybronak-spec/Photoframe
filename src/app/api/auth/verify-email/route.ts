@@ -45,24 +45,24 @@ function respond(req: Request, status: Status, okFlag: boolean) {
  * for an *unverified* account are rejected.
  */
 export async function GET(req: Request) {
-  const db = getDb();
+  const db = await getDb();
   const token = new URL(req.url).searchParams.get("token") ?? "";
   if (!token || token.length > 200) return respond(req, STATUS.invalid, false);
 
-  const row = db
+  const row = (await db
     .prepare(
       `SELECT id, user_id, expires_at, used_at FROM verification_tokens
        WHERE token_hash = ? AND kind = 'verify_email'`
     )
-    .get(sha256(token)) as
+    .get(sha256(token))) as
     | { id: string; user_id: string; expires_at: string; used_at: string | null }
     | undefined;
 
   if (!row) return respond(req, STATUS.invalid, false);
 
-  const user = db
+  const user = (await db
     .prepare("SELECT id, email, name, email_verified_at FROM users WHERE id = ?")
-    .get(row.user_id) as
+    .get(row.user_id)) as
     | { id: string; email: string; name: string; email_verified_at: string | null }
     | undefined;
   if (!user) return respond(req, STATUS.invalid, false);
@@ -81,21 +81,24 @@ export async function GET(req: Request) {
   }
 
   const now = nowIso();
-  db.prepare("UPDATE verification_tokens SET used_at = ? WHERE id = ?").run(
-    now,
-    row.id
-  );
-  db.prepare(
-    "UPDATE users SET email_verified_at = ?, updated_at = ? WHERE id = ?"
-  ).run(now, now, user.id);
+  // Token consumption + verification + retiring stale links are one atomic unit.
+  await db.tx(async (tx) => {
+    await tx.prepare("UPDATE verification_tokens SET used_at = ? WHERE id = ?").run(
+      now,
+      row.id
+    );
+    await tx
+      .prepare("UPDATE users SET email_verified_at = ?, updated_at = ? WHERE id = ?")
+      .run(now, now, user.id);
+    await tx
+      .prepare(
+        `UPDATE verification_tokens SET used_at = ?
+       WHERE user_id = ? AND kind = 'verify_email' AND used_at IS NULL`
+      )
+      .run(now, user.id);
+  });
 
-  // Retire any other outstanding verification links for this account.
-  db.prepare(
-    `UPDATE verification_tokens SET used_at = ?
-     WHERE user_id = ? AND kind = 'verify_email' AND used_at IS NULL`
-  ).run(now, user.id);
-
-  logEvent(user.id, "account_verified", "Email verified");
+  await logEvent(user.id, "account_verified", "Email verified");
   await sendTemplatedEmail({
     template: "welcome",
     to: user.email,
@@ -120,14 +123,14 @@ export async function POST(req: Request) {
   if (!user) return fail("Sign in required", "UNAUTHORIZED");
   if (user.email_verified_at) return ok({ alreadyVerified: true });
 
-  const db = getDb();
-  const last = db
+  const db = await getDb();
+  const last = (await db
     .prepare(
       `SELECT created_at FROM verification_tokens
        WHERE user_id = ? AND kind = 'verify_email'
        ORDER BY created_at DESC LIMIT 1`
     )
-    .get(user.id) as { created_at: string } | undefined;
+    .get(user.id)) as { created_at: string } | undefined;
 
   if (last) {
     const elapsed = (Date.now() - Date.parse(last.created_at)) / 1000;
@@ -143,16 +146,18 @@ export async function POST(req: Request) {
   }
 
   const token = generateToken(32);
-  db.prepare(
-    `INSERT INTO verification_tokens (id, user_id, kind, token_hash, expires_at, created_at)
-     VALUES (?, ?, 'verify_email', ?, ?, ?)`
-  ).run(
-    generateToken(12),
-    user.id,
-    sha256(token),
-    new Date(Date.now() + VERIFY_TTL_HOURS * 3600e3).toISOString(),
-    nowIso()
-  );
+  await db
+    .prepare(
+      `INSERT INTO verification_tokens (id, user_id, kind, token_hash, expires_at, created_at)
+       VALUES (?, ?, 'verify_email', ?, ?, ?)`
+    )
+    .run(
+      generateToken(12),
+      user.id,
+      sha256(token),
+      new Date(Date.now() + VERIFY_TTL_HOURS * 3600e3).toISOString(),
+      nowIso()
+    );
 
   const delivery = await sendTemplatedEmail({
     template: "verify_email",

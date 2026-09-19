@@ -9,7 +9,7 @@
  *        npm run db:admin -- someone@studio.com --revoke
  */
 
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite"; // SQLite tooling — development only
 import fs from "node:fs";
 import path from "node:path";
 
@@ -31,6 +31,14 @@ if (!fs.existsSync(dbFile)) {
 const revoke = flags.includes("--revoke");
 const role = revoke ? "user" : "admin";
 const db = new DatabaseSync(dbFile);
+if (process.env.NODE_ENV === "production") {
+  console.error(
+    "[zenframe] db:admin edits the local SQLite file and is a development tool. " +
+      "In production (Postgres) promote an admin with: " +
+      "psql \"$DATABASE_URL\" -c \"UPDATE users SET role='admin' WHERE email='<email>';\""
+  );
+  process.exit(1);
+}
 const res = db
   .prepare("UPDATE users SET role = ?, updated_at = ? WHERE lower(email) = lower(?)")
   .run(role, new Date().toISOString(), email.trim());
