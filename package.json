@@ -1,0 +1,39 @@
+{
+  "name": "zenframe",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test:api": "node scripts/smoke.mjs",
+    "test:manifest": "node scripts/audit-cleanup.mjs",
+    "make-icons": "node scripts/make-icons.mjs",
+    "db:check": "node scripts/db-check.mjs",
+    "db:backup": "node scripts/db-backup.mjs",
+    "db:admin": "node scripts/make-admin.mjs"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.8.0",
+    "firebase": "^12.19.0",
+    "firebase-admin": "^14.4.0",
+    "framer-motion": "^13.4.0",
+    "lucide-react": "^1.47.0",
+    "next": "16.3.5",
+    "pg": "^8.23.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.5",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
