@@ -1,12 +1,13 @@
 import { ImageResponse } from "next/og";
-import { FRAMES, getFrame } from "@/lib/frames";
+import { getAllFrames, getFrame } from "@/lib/frames";
+import { findAnyFrame } from "@/server/frame-catalog";
 
 export const runtime = "nodejs";
 export const size = { width: 1000, height: 1250 };
 export const contentType = "image/png";
 
 export function generateStaticParams() {
-  return FRAMES.map((f) => ({ slug: f.slug }));
+  return getAllFrames().map((f) => ({ slug: f.slug }));
 }
 
 export async function GET(
@@ -14,7 +15,7 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
-  const frame = getFrame(slug);
+  const frame = (await findAnyFrame(slug)) ?? getFrame(slug);
 
   return new ImageResponse(
     (

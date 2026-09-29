@@ -221,6 +221,7 @@ let shareSlugA = null;
 let adminId = null;
 let userBId = null;
 let userBJar = null;
+let adminJar = null;
 
 /* ------------------------------------------------------------------ */
 /* The suite                                                           */
@@ -752,9 +753,23 @@ async function run() {
     assert(typeof res.json.total === "number", "no total");
   });
 
-  await check("admin frame metadata updates are persisted", async () => {
+  await check("admin frame metadata updates are persisted & all 24 frames render in Gallery and Editor", async () => {
     const list = await req("/api/admin/frames");
     eq(list.status, 200, "list status");
+    eq(list.json.frames.length, 24, "expected all 24 registered frames in admin catalog");
+
+    const galleryPage = await fetch(`${BASE}/frames`);
+    eq(galleryPage.status, 200, "/frames gallery status");
+    const galleryHtml = await galleryPage.text();
+    for (const f of list.json.frames) {
+      assert(galleryHtml.includes(`/frames/${f.slug}`), `Gallery /frames missing link for ${f.slug}`);
+      const editorRes = await fetch(`${BASE}/frames/${f.slug}`);
+      eq(editorRes.status, 200, `/frames/${f.slug} editor status`);
+    }
+    // Verify legacy ID alias resolution in editor route
+    const aliasRes = await fetch(`${BASE}/frames/f-iyd-2026`);
+    eq(aliasRes.status, 200, "/frames/f-iyd-2026 alias resolution status");
+
     const res = await req("/api/admin/frames/lotus-heart", {
       method: "PATCH",
       body: { tags: ["heart", "bloom"], featured: true },
@@ -765,7 +780,7 @@ async function run() {
     const updated = after.json.frames.find((f) => f.slug === "lotus-heart");
     assert(updated.tags.includes("bloom"), "tags not saved");
     // restore
-    await req("/api/admin/frames/lotus-heart", { method: "PATCH", body: { tags: [] } });
+    await req("/api/admin/frames/lotus-heart", { method: "PATCH", body: { tags: [], featured: false } });
   });
 
   await check("admin content settings update", async () => {
@@ -800,7 +815,7 @@ async function run() {
     eq(suspend.status, 200, "suspend status");
     eq(suspend.json.user.status, "suspended", "status field");
 
-    const adminJar = cloneJar();
+    adminJar = cloneJar();
 
     // B's existing cookie must stop working immediately.
     useJar(userBJar);
@@ -832,6 +847,180 @@ async function run() {
       log.json.events.some((e) => e.type === "creation_deleted"),
       "deletion not in activity log"
     );
+  });
+
+  /* ---------------- campaign studio ---------------- */
+  section("Campaign studio (admin compose → anonymous user wizard)");
+
+  // 1×1 PNG artwork for the campaign upload tests.
+  const CAMPAIGN_PNG =
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+
+  await check("campaign APIs are admin-only (anonymous + normal user 401/403)", async () => {
+    useJar(freshJar());
+    const anon = await req("/api/admin/campaigns");
+    assert([401, 403].includes(anon.status), `anonymous got ${anon.status}`);
+
+    // User B's original session was revoked by the suspension test above,
+    // so log in again to prove a *valid* non-admin session gets 403.
+    userBJar = {};
+    useJar(userBJar);
+    const reloginB = await req("/api/auth/login", { method: "POST", body: userB });
+    eq(reloginB.status, 200, "user B re-login after reinstate");
+    const normal = await req("/api/admin/campaigns");
+    eq(normal.status, 403, "normal-user status");
+    const normalCreate = await req("/api/admin/campaigns", {
+      method: "POST",
+      body: { name: "Nope" },
+    });
+    assert([401, 403].includes(normalCreate.status), `normal-user create got ${normalCreate.status}`);
+
+    useJar(adminJar); // stay in admin context for the rest of the section
+  });
+
+  let campaignId = null;
+  let campaignSlug = null;
+
+  await check("admin can create a draft campaign", async () => {
+    useJar(adminJar);
+    const res = await req("/api/admin/campaigns", {
+      method: "POST",
+      body: {
+        name: `Yoga Day ${stamp}`,
+        district: "Udupi",
+        description: "Community photo frame",
+        canvas_width: 1080,
+        canvas_height: 1350,
+        photoConfig: { enabled: true, shape: "circle", x: 30, y: 30, width: 40, height: 40, rotation: 0 },
+        nameConfig: { enabled: true, x: 20, y: 80, width: 60, height: 12, rotation: 0, font_family: "Plus Jakarta Sans", font_size: 26, font_color: "#fff8f0", font_weight: "bold", alignment: "center", letter_spacing: 1 },
+      },
+    });
+    eq(res.status, 201, "create status");
+    assert(res.json.campaign?.id, "no campaign id");
+    campaignId = res.json.campaign.id;
+    campaignSlug = res.json.campaign.slug;
+    assert(typeof campaignSlug === "string" && campaignSlug.length > 0, "no slug");
+  });
+
+  await check("artwork upload validates MIME + magic bytes and stores privately", async () => {
+    useJar(adminJar);
+    const bad = await req("/api/admin/campaigns/upload", {
+      method: "POST",
+      body: { dataUrl: "data:image/png;base64,AAAA", campaignId },
+    });
+    assert([400, 415].includes(bad.status), `invalid image accepted (${bad.status})`);
+
+    const good = await req("/api/admin/campaigns/upload", {
+      method: "POST",
+      body: { dataUrl: CAMPAIGN_PNG, campaignId },
+    });
+    eq(good.status, 200, "upload status");
+    assert(good.json.artwork?.key?.startsWith("campaigns/"), "unexpected storage key");
+    assert(good.json.artwork?.adminUrl, "no admin artwork url");
+  });
+
+  await check("admin composition geometry is validated and persisted", async () => {
+    useJar(adminJar);
+    const res = await req(`/api/admin/campaigns/${campaignId}`, {
+      method: "PUT",
+      body: {
+        art_x: 0, art_y: 0, art_w: 100, art_h: 100, art_rotation: 0,
+        photoConfig: { enabled: true, shape: "circle", x: 32, y: 34, width: 36, height: 36, rotation: 0 },
+        nameConfig: { enabled: true, x: 20, y: 78, width: 60, height: 12, rotation: 0, font_family: "Plus Jakarta Sans", font_size: 26, font_color: "#fff8f0", font_weight: "bold", alignment: "center", letter_spacing: 1 },
+      },
+    });
+    eq(res.status, 200, "update status");
+    assert(res.json.campaign?.photoConfig?.enabled === true, "photo config not saved");
+    assert(res.json.campaign?.photoConfig?.width >= 4 && res.json.campaign?.photoConfig?.width <= 100, "width unclamped");
+  });
+
+  await check("draft campaign is invisible to the public wizard", async () => {
+    const page = await req(`/campaign/${campaignSlug}`, { raw: true });
+    eq(page.status, 404, "draft campaign page status");
+    const art = await fetch(`${BASE}/api/campaigns/${campaignId}/artwork`);
+    eq(art.status, 404, "draft artwork status");
+    const ev = await req(`/api/campaigns/${campaignId}/events`, {
+      method: "POST",
+      body: { eventType: "generate" },
+    });
+    eq(ev.status, 404, "draft events status");
+  });
+
+  await check("publishing makes the campaign publicly composable", async () => {
+    useJar(adminJar);
+    const pub = await req(`/api/admin/campaigns/${campaignId}/status`, {
+      method: "PATCH",
+      body: { status: "active" },
+    });
+    eq(pub.status, 200, "publish status");
+
+    const page = await req(`/campaign/${campaignSlug}`, { raw: true });
+    eq(page.status, 200, "campaign page status");
+    assert(page.text.includes("ZenFrame"), "brand missing on campaign page");
+
+    const art = await fetch(`${BASE}/api/campaigns/${campaignId}/artwork`);
+    eq(art.status, 200, "public artwork status");
+    const ct = art.headers.get("content-type") ?? "";
+    assert(ct.startsWith("image/"), `unexpected artwork content-type ${ct}`);
+  });
+
+  await check("anonymous events are recorded (generate/download/share types)", async () => {
+    for (const eventType of ["generate", "download", "whatsapp"]) {
+      const ev = await req(`/api/campaigns/${campaignId}/events`, {
+        method: "POST",
+        body: { eventType },
+      });
+      eq(ev.status, 204, `event ${eventType} status`);
+    }
+    const bad = await req(`/api/campaigns/${campaignId}/events`, {
+      method: "POST",
+      body: { eventType: "self-destruct" },
+    });
+    eq(bad.status, 400, "unknown event status");
+
+    useJar(adminJar);
+    const list = await req(`/api/admin/campaigns?status=active&page=1&limit=10`);
+    eq(list.status, 200, "campaign list status");
+    const mine = list.json.campaigns?.find((c) => c.id === campaignId);
+    assert(mine, "campaign missing from list");
+    assert(mine.frames === 1, `frames count expected 1, got ${mine.frames}`);
+    assert(mine.shares === 2, `shares count expected 2, got ${mine.shares}`);
+
+    const metrics = await req("/api/admin/campaigns/metrics");
+    eq(metrics.status, 200, "metrics status");
+    assert(metrics.json.metrics?.totalFrames >= 1, "metrics totalFrames missing");
+  });
+
+  await check("campaign creation requires a name (400)", async () => {
+    useJar(adminJar);
+    const res = await req("/api/admin/campaigns", { method: "POST", body: { name: "   " } });
+    eq(res.status, 400, "missing-name status");
+  });
+
+  await check("admin can pause a campaign and the wizard + artwork go dark", async () => {
+    useJar(adminJar);
+    const pause = await req(`/api/admin/campaigns/${campaignId}/status`, {
+      method: "PATCH",
+      body: { status: "paused" },
+    });
+    eq(pause.status, 200, "pause status");
+
+    const art = await fetch(`${BASE}/api/campaigns/${campaignId}/artwork`);
+    eq(art.status, 404, "paused artwork should 404");
+
+    const ev = await req(`/api/campaigns/${campaignId}/events`, {
+      method: "POST",
+      body: { eventType: "generate" },
+    });
+    eq(ev.status, 404, "paused events should 404");
+  });
+
+  await check("deleting a campaign removes row, configs and artwork", async () => {
+    useJar(adminJar);
+    const del = await req(`/api/admin/campaigns/${campaignId}`, { method: "DELETE" });
+    eq(del.status, 200, "delete status");
+    const gone = await req(`/api/admin/campaigns/${campaignId}`);
+    eq(gone.status, 404, "campaign should be gone");
   });
 
   /* ---------------- analytics ---------------- */

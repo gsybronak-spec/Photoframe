@@ -13,17 +13,25 @@ interface Props {
   occasions: Occasion[];
 }
 
-/** Search relevance: title prefix > title substring > category > tagline/tags. */
+/** Search relevance: title prefix > title substring > category/slug > tagline/tags/description. */
 function relevance(frame: CatalogFrame, q: string): number {
   if (!q) return 0;
-  const needle = q.toLowerCase();
-  const title = frame.title.toLowerCase();
-  if (title.startsWith(needle)) return 4;
-  if (title.includes(needle)) return 3;
-  if (frame.category.toLowerCase().includes(needle)) return 2;
-  if (frame.tagline.toLowerCase().includes(needle)) return 2;
-  if (frameTags(frame).some((t) => t.toLowerCase().includes(needle))) return 1;
-  if (frame.description.toLowerCase().includes(needle)) return 1;
+  const needle = q.trim().toLowerCase();
+  if (!needle) return 0;
+  const title = (frame.title || "").toLowerCase();
+  const slug = (frame.slug || "").toLowerCase();
+  const category = (frame.category || frame.occasion || "General").toLowerCase();
+  const tagline = (frame.tagline || "").toLowerCase();
+  const description = (frame.description || "").toLowerCase();
+  const art = (frame.art || "").toLowerCase();
+  const motif = (frame.style?.motif || "").toLowerCase();
+
+  if (title.startsWith(needle) || slug.startsWith(needle)) return 4;
+  if (title.includes(needle) || slug.includes(needle)) return 3;
+  if (category.includes(needle)) return 2;
+  if (tagline.includes(needle)) return 2;
+  if (frameTags(frame).some((t) => String(t).toLowerCase().includes(needle))) return 1;
+  if (description.includes(needle) || art.includes(needle) || motif.includes(needle)) return 1;
   return 0;
 }
 
@@ -35,7 +43,16 @@ function relevance(frame: CatalogFrame, q: string): number {
 export function GalleryGrid({ frames, occasions }: Props) {
   const params = useSearchParams();
   const router = useRouter();
-  const occasion = params.get("occasion") ?? "All";
+  const rawOccasion = params.get("occasion") ?? "All";
+  // Ensure an unknown/stale ?occasion= URL param falls back to "All" rather than hiding all frames
+  const matchedOccasion = useMemo(() => {
+    if (!rawOccasion || rawOccasion.toLowerCase() === "all") return "All";
+    const found = occasions.find(
+      (o) => o.toLowerCase() === rawOccasion.trim().toLowerCase()
+    );
+    return found ?? "All";
+  }, [rawOccasion, occasions]);
+  const occasion = matchedOccasion;
   const query = params.get("q") ?? "";
 
   const [input, setInput] = useState(query);
@@ -61,7 +78,7 @@ export function GalleryGrid({ frames, occasions }: Props) {
           ? frames.filter(
               (f) =>
                 relevance(f, needle) > 0 ||
-                frameTags(f).some((t) => t.toLowerCase().includes(needle))
+                frameTags(f).some((t) => String(t).toLowerCase().includes(needle))
             ).length
           : frames.length;
         // No free text is ever sent — only a length bucket and the result count.
@@ -83,12 +100,20 @@ export function GalleryGrid({ frames, occasions }: Props) {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const targetOccasion = occasion.toLowerCase();
     return frames
       .map((f) => ({ f, score: relevance(f, q) }))
       .filter(({ f, score }) => {
-        const matchOccasion = occasion === "All" || f.category === occasion;
+        const frameCat = (f.category || f.occasion || "General").toLowerCase();
+        const frameOcc = (f.occasion || f.category || "General").toLowerCase();
+        const matchOccasion =
+          occasion === "All" ||
+          frameCat === targetOccasion ||
+          frameOcc === targetOccasion;
         const matchQuery =
-          !q || score > 0 || frameTags(f).some((t) => t.toLowerCase().includes(q));
+          !q ||
+          score > 0 ||
+          frameTags(f).some((t) => String(t).toLowerCase().includes(q));
         return matchOccasion && matchQuery;
       })
       .sort((a, b) => b.score - a.score || a.f.title.localeCompare(b.f.title))
@@ -204,7 +229,7 @@ export function GalleryGrid({ frames, occasions }: Props) {
       {filtered.length > 0 ? (
         <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           {filtered.map((f, i) => (
-            <Reveal key={f.id} delay={Math.min(i * 0.05, 0.4)}>
+            <Reveal key={f.slug} delay={Math.min(i * 0.05, 0.4)}>
               <FrameCard frame={f} />
             </Reveal>
           ))}

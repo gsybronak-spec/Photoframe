@@ -1,5 +1,13 @@
 /**
- * ZenFrame frame engine.
+ * ZenFrame frame engine & centralized frame registry.
+ *
+ * Single source of truth for:
+ *   - Gallery (/frames)
+ *   - Search & Category/Occasion Filters (GalleryGrid)
+ *   - Frame Editor (/frames/[slug] & FrameEditor)
+ *   - Featured & Trending frames (HomePage)
+ *   - Public / Shared frames (/s/[slug], /creations/[id])
+ *   - SEO Metadata, OpenGraph images (/frames/[slug]/og) & Sitemap (/sitemap.xml)
  *
  * Every frame is built from three composable layers, rendered as pure SVG:
  *   1. backdrop — soft gradient wash + optional decorative marks (mandala spokes, sun rays)
@@ -10,13 +18,39 @@
  * All original artwork. 1000 x 1250 (4:5) canvas — ideal for IG posts/stories.
  */
 
-export type Occasion =
-  | "Morning Flow"
-  | "Yoga Day"
-  | "Meditation"
-  | "Sunset Flow"
-  | "Breathwork"
-  | "Mindfulness";
+export const BASE_OCCASIONS = [
+  "Morning Flow",
+  "Yoga Day",
+  "Meditation",
+  "Sunset Flow",
+  "Breathwork",
+  "Mindfulness",
+] as const;
+
+export type BaseOccasion = (typeof BASE_OCCASIONS)[number];
+export type Occasion = BaseOccasion | "General" | (string & {});
+
+export const DEFAULT_OCCASION: Occasion = "General";
+
+export const OCCASIONS: Occasion[] = [...BASE_OCCASIONS];
+
+export type FrameMotif =
+  | "rays"
+  | "mandala"
+  | "petals"
+  | "rings"
+  | "bubbles"
+  | "mountains";
+
+export type FrameArt =
+  | "lotus"
+  | "sun"
+  | "om"
+  | "chakra"
+  | "candle"
+  | "incense"
+  | "waves"
+  | "moon";
 
 export interface FrameStyle {
   /** gradient stops for the backdrop, [start, end] */
@@ -27,41 +61,115 @@ export interface FrameStyle {
   /** deep tone for title text */
   ink: string;
   /** backdrop decoration motif */
-  motif: "rays" | "mandala" | "petals" | "rings" | "bubbles" | "mountains";
+  motif: FrameMotif;
 }
 
 export interface Frame {
   id: string;
   slug: string;
   title: string;
-  /** category — mirrors occasion, kept as its own field for the data model */
+  /** category — mirrors occasion, defaults to "General" when metadata is missing */
   category?: Occasion;
   occasion: Occasion;
   tagline: string;
   /** long description for detail/OG metadata (defaults to tagline) */
   description?: string;
-  /** search tags (defaults to [occasion, art]) */
+  /** search tags (defaults to [category, occasion, art, motif]) */
   tags?: string[];
   trending?: boolean;
+  active?: boolean;
+  featured?: boolean;
   style: FrameStyle;
   /** which center art the overlay draws */
-  art:
-    | "lotus"
-    | "sun"
-    | "om"
-    | "chakra"
-    | "candle"
-    | "incense"
-    | "waves"
-    | "moon";
+  art: FrameArt;
+  /** alternate slugs/IDs that resolve to this frame */
+  aliases?: string[];
+  /** true when category/occasion was missing and defaulted to General */
+  hasMissingMetadata?: boolean;
 }
 
-/** Derived, overridable metadata — keeps adding a frame to a single object. */
-export const frameCategory = (f: Frame): Occasion => f.category ?? f.occasion;
-export const frameDescription = (f: Frame): string =>
-  f.description ?? `${f.tagline}. A hand-crafted yoga photo frame by ZenFrame.`;
-export const frameTags = (f: Frame): string[] =>
-  f.tags ?? [f.occasion, f.art];
+/** Input contract when adding a new frame — only title/slug + minimal fields needed. */
+export interface FrameInput {
+  id?: string;
+  slug?: string;
+  title: string;
+  category?: Occasion | string;
+  occasion?: Occasion | string;
+  tagline?: string;
+  description?: string;
+  tags?: string[];
+  trending?: boolean;
+  active?: boolean;
+  featured?: boolean;
+  style?: Partial<FrameStyle>;
+  art?: FrameArt | string;
+  aliases?: string[];
+}
+
+export const DEFAULT_FRAME_STYLE: FrameStyle = {
+  from: "#FFE9C7",
+  to: "#FFD3A3",
+  accent: "#F59E0B",
+  ink: "#92400E",
+  motif: "rays",
+};
+
+const VALID_MOTIFS = new Set<FrameMotif>([
+  "rays",
+  "mandala",
+  "petals",
+  "rings",
+  "bubbles",
+  "mountains",
+]);
+
+const VALID_ARTS = new Set<FrameArt>([
+  "lotus",
+  "sun",
+  "om",
+  "chakra",
+  "candle",
+  "incense",
+  "waves",
+  "moon",
+]);
+
+/** Converts any string into a canonical URL-safe lowercase slug. */
+export function normalizeSlug(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/['’"`]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+/** Derived, overridable metadata — never returns undefined or empty values. */
+export const frameCategory = (f: Partial<Frame> | undefined): Occasion => {
+  const raw = (f?.category ?? f?.occasion ?? "").toString().trim();
+  return (raw || DEFAULT_OCCASION) as Occasion;
+};
+
+export const frameDescription = (f: Partial<Frame> | undefined): string => {
+  const desc = (f?.description ?? "").toString().trim();
+  if (desc) return desc;
+  const tagline = (f?.tagline ?? f?.title ?? "Mindful yoga practice").toString().trim();
+  return `${tagline}. A hand-crafted yoga photo frame by ZenFrame.`;
+};
+
+export const frameTags = (f: Partial<Frame> | undefined): string[] => {
+  const custom = Array.isArray(f?.tags)
+    ? f.tags.map((t) => String(t ?? "").trim()).filter(Boolean)
+    : [];
+  if (custom.length > 0) return Array.from(new Set(custom));
+  const cat = frameCategory(f);
+  const occ = (f?.occasion ?? "").toString().trim() || cat;
+  const art = (f?.art ?? "lotus").toString().trim();
+  const motif = (f?.style?.motif ?? "").toString().trim();
+  return Array.from(new Set([cat, occ, art, motif].filter(Boolean)));
+};
 
 /* ------------------------------------------------------------------ */
 /* Catalogue metadata                                                  */
@@ -89,8 +197,8 @@ export type CatalogFrame = Frame & FrameMeta;
 /** Code defaults for a frame, before any admin override is merged in. */
 export function codeMeta(f: Frame): FrameMeta {
   return {
-    active: true,
-    featured: f.trending === true,
+    active: f.active !== false,
+    featured: f.featured === true || f.trending === true,
     description: frameDescription(f),
     category: frameCategory(f),
     tags: frameTags(f),
@@ -98,25 +206,38 @@ export function codeMeta(f: Frame): FrameMeta {
 }
 
 export function toCatalogFrame(f: Frame, meta?: Partial<FrameMeta>): CatalogFrame {
-  return { ...f, ...codeMeta(f), ...meta };
-}
+  const base = codeMeta(f);
+  const mergedCategory =
+    meta?.category && String(meta.category).trim()
+      ? (String(meta.category).trim() as Occasion)
+      : base.category;
+  const mergedTags =
+    Array.isArray(meta?.tags) && meta.tags.length > 0 ? meta.tags : base.tags;
+  const mergedDescription =
+    meta?.description && String(meta.description).trim()
+      ? String(meta.description).trim()
+      : base.description;
 
-export const OCCASIONS: Occasion[] = [
-  "Morning Flow",
-  "Yoga Day",
-  "Meditation",
-  "Sunset Flow",
-  "Breathwork",
-  "Mindfulness",
-];
+  return {
+    ...f,
+    ...base,
+    ...meta,
+    active: meta?.active !== undefined ? Boolean(meta.active) : base.active,
+    featured: meta?.featured !== undefined ? Boolean(meta.featured) : base.featured,
+    category: mergedCategory,
+    occasion: f.occasion || mergedCategory,
+    description: mergedDescription,
+    tags: mergedTags,
+  };
+}
 
 const BRAND = "ZENFRAME";
 
 /* ------------------------------------------------------------------ */
-/* Frame catalogue                                                     */
+/* Raw Frame Definitions (Single Place to Add New Frames)              */
 /* ------------------------------------------------------------------ */
 
-export const FRAMES: Frame[] = [
+const RAW_FRAMES: FrameInput[] = [
   {
     id: "f-sunrise-salutation",
     slug: "sunrise-salutation",
@@ -265,10 +386,369 @@ export const FRAMES: Frame[] = [
     style: { from: "#FFE3D6", to: "#F5C9C9", accent: "#FF7E67", ink: "#9A3412", motif: "rings" },
     art: "waves",
   },
+  {
+    id: "f-surya-namaskar-gold",
+    slug: "surya-namaskar-gold",
+    title: "Surya Namaskar Gold",
+    occasion: "Morning Flow",
+    tagline: "Twelve postures in warm solar harmony",
+    trending: true,
+    style: { from: "#FFF4D9", to: "#FFD89B", accent: "#EA580C", ink: "#7C2D12", motif: "rays" },
+    art: "sun",
+  },
+  {
+    id: "f-prana-mudra-flow",
+    slug: "prana-mudra-flow",
+    title: "Prana Mudra Flow",
+    occasion: "Breathwork",
+    tagline: "Awaken vital energy with every conscious breath",
+    style: { from: "#E0F7EE", to: "#BCEAD8", accent: "#0D9488", ink: "#115E59", motif: "rings" },
+    art: "om",
+  },
+  {
+    id: "f-himalayan-dawn",
+    slug: "himalayan-dawn",
+    title: "Himalayan Dawn",
+    occasion: "Morning Flow",
+    tagline: "First light over serene mountain peaks",
+    style: { from: "#FCE7D2", to: "#F5CBA7", accent: "#D97706", ink: "#78350F", motif: "mountains" },
+    art: "sun",
+  },
+  {
+    id: "f-kundalini-awakening",
+    slug: "kundalini-awakening",
+    title: "Kundalini Awakening",
+    occasion: "Mindfulness",
+    tagline: "Rise from root to crown in balanced awareness",
+    style: { from: "#F1E8FB", to: "#DEC9F6", accent: "#7C3AED", ink: "#4C1D95", motif: "mandala" },
+    art: "chakra",
+  },
+  {
+    id: "f-sacred-lotus-pond",
+    slug: "sacred-lotus-pond",
+    title: "Sacred Lotus Pond",
+    occasion: "Meditation",
+    tagline: "Rooted in earth, blooming toward the sky",
+    style: { from: "#FCE8F3", to: "#F5CBE2", accent: "#DB2777", ink: "#831843", motif: "petals" },
+    art: "lotus",
+  },
+  {
+    id: "f-savasana-starlight",
+    slug: "savasana-starlight",
+    title: "Savasana Starlight",
+    occasion: "Mindfulness",
+    tagline: "Deep stillness beneath a quiet night sky",
+    style: { from: "#E5EDF7", to: "#CBD9EC", accent: "#475569", ink: "#1E293B", motif: "bubbles" },
+    art: "moon",
+  },
+  {
+    id: "f-anahata-heart-bloom",
+    slug: "anahata-heart-bloom",
+    title: "Anahata Heart Bloom",
+    occasion: "Yoga Day",
+    tagline: "Compassion and unity in every practice",
+    style: { from: "#DCFCE7", to: "#BBF7D0", accent: "#16A34A", ink: "#14532D", motif: "mandala" },
+    art: "lotus",
+  },
+  {
+    id: "f-twilight-pranayama",
+    slug: "twilight-pranayama",
+    title: "Twilight Pranayama",
+    occasion: "Sunset Flow",
+    tagline: "Gentle evening rhythms to settle the mind",
+    style: { from: "#FFE8DF", to: "#F9C7B8", accent: "#F97316", ink: "#9A3412", motif: "rings" },
+    art: "waves",
+  },
 ];
 
-export function getFrame(slug: string): Frame | undefined {
-  return FRAMES.find((f) => f.slug === slug);
+/* ------------------------------------------------------------------ */
+/* Centralized Frame Registry & Normalization Engine                   */
+/* ------------------------------------------------------------------ */
+
+export interface FrameRegistryReport {
+  valid: boolean;
+  total: number;
+  uniqueSlugs: number;
+  duplicateSlugs: string[];
+  duplicateIds: string[];
+  missingMetadataSlugs: string[];
+  warnings: string[];
+}
+
+export function normalizeFrameInput(
+  input: FrameInput,
+  index: number,
+  state: {
+    seenSlugs: Set<string>;
+    seenIds: Set<string>;
+    duplicateSlugs: string[];
+    duplicateIds: string[];
+    missingMetadataSlugs: string[];
+    warnings: string[];
+  }
+): Frame {
+  const rawTitle = (input.title ?? "").toString().trim() || `Yoga Frame ${index + 1}`;
+  const baseSlugCandidate =
+    normalizeSlug(input.slug) ||
+    normalizeSlug(input.id?.replace(/^f-/i, "")) ||
+    normalizeSlug(rawTitle) ||
+    `frame-${index + 1}`;
+
+  let slug = baseSlugCandidate;
+  if (state.seenSlugs.has(slug)) {
+    state.duplicateSlugs.push(slug);
+    let suffix = 2;
+    while (state.seenSlugs.has(`${baseSlugCandidate}-${suffix}`)) {
+      suffix += 1;
+    }
+    const disambiguated = `${baseSlugCandidate}-${suffix}`;
+    const msg = `Duplicate frame slug "${slug}" at index ${index} ("${rawTitle}"); auto-disambiguated to "${disambiguated}".`;
+    state.warnings.push(msg);
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(`[zenframe:frames] ${msg}`);
+    }
+    slug = disambiguated;
+  }
+  state.seenSlugs.add(slug);
+
+  const baseIdCandidate =
+    (input.id ?? "").toString().trim()
+      ? `f-${normalizeSlug(String(input.id).replace(/^f-/i, ""))}`
+      : `f-${slug}`;
+
+  let id = baseIdCandidate;
+  if (state.seenIds.has(id)) {
+    state.duplicateIds.push(id);
+    let suffix = 2;
+    while (state.seenIds.has(`${baseIdCandidate}-${suffix}`)) {
+      suffix += 1;
+    }
+    id = `${baseIdCandidate}-${suffix}`;
+    state.warnings.push(
+      `Duplicate frame id "${baseIdCandidate}" at index ${index}; auto-disambiguated to "${id}".`
+    );
+  }
+  state.seenIds.add(id);
+
+  // Check category & occasion metadata — NEVER silently hide a frame with missing metadata
+  const rawOccasion = (input.occasion ?? "").toString().trim();
+  const rawCategory = (input.category ?? "").toString().trim();
+  const hasMissingMetadata = !rawOccasion && !rawCategory;
+
+  if (hasMissingMetadata) {
+    state.missingMetadataSlugs.push(slug);
+    const msg = `Frame "${slug}" ("${rawTitle}") is missing category/occasion metadata; placed in "${DEFAULT_OCCASION}" collection.`;
+    state.warnings.push(msg);
+    if (process.env.NODE_ENV !== "production") {
+      console.warn(`[zenframe:frames] ${msg}`);
+    }
+  }
+
+  const resolvedCategory = (rawCategory || rawOccasion || DEFAULT_OCCASION) as Occasion;
+  const resolvedOccasion = (rawOccasion || rawCategory || DEFAULT_OCCASION) as Occasion;
+
+  const rawMotif = (input.style?.motif ?? DEFAULT_FRAME_STYLE.motif) as FrameMotif;
+  const motif: FrameMotif = VALID_MOTIFS.has(rawMotif)
+    ? rawMotif
+    : DEFAULT_FRAME_STYLE.motif;
+
+  const rawArt = (input.art ?? "lotus") as FrameArt;
+  const art: FrameArt = VALID_ARTS.has(rawArt) ? rawArt : "lotus";
+
+  const style: FrameStyle = {
+    from: input.style?.from?.trim() || DEFAULT_FRAME_STYLE.from,
+    to: input.style?.to?.trim() || DEFAULT_FRAME_STYLE.to,
+    accent: input.style?.accent?.trim() || DEFAULT_FRAME_STYLE.accent,
+    ink: input.style?.ink?.trim() || DEFAULT_FRAME_STYLE.ink,
+    motif,
+  };
+
+  const tagline =
+    (input.tagline ?? "").toString().trim() ||
+    "Mindful yoga practice, framed with intention";
+
+  const aliasSet = new Set<string>();
+  aliasSet.add(slug);
+  aliasSet.add(id.toLowerCase());
+  aliasSet.add(id.replace(/^f-/i, "").toLowerCase());
+  const titleSlug = normalizeSlug(rawTitle);
+  if (titleSlug) aliasSet.add(titleSlug);
+  if (input.id) {
+    aliasSet.add(String(input.id).trim().toLowerCase());
+    aliasSet.add(normalizeSlug(String(input.id).replace(/^f-/i, "")));
+  }
+  if (Array.isArray(input.aliases)) {
+    for (const a of input.aliases) {
+      const norm = normalizeSlug(a);
+      if (norm) aliasSet.add(norm);
+    }
+  }
+
+  const normalized: Frame = {
+    id,
+    slug,
+    title: rawTitle,
+    occasion: resolvedOccasion,
+    category: resolvedCategory,
+    tagline,
+    description:
+      (input.description ?? "").toString().trim() ||
+      `${tagline}. A hand-crafted yoga photo frame by ZenFrame.`,
+    tags:
+      Array.isArray(input.tags) && input.tags.filter(Boolean).length > 0
+        ? Array.from(new Set(input.tags.map((t) => String(t).trim()).filter(Boolean)))
+        : Array.from(new Set([resolvedCategory, resolvedOccasion, art, motif].filter(Boolean))),
+    trending: Boolean(input.trending),
+    active: input.active !== false,
+    featured: Boolean(input.featured ?? input.trending),
+    style,
+    art,
+    aliases: Array.from(aliasSet),
+    hasMissingMetadata,
+  };
+
+  return normalized;
+}
+
+const REGISTRY_STATE = {
+  seenSlugs: new Set<string>(),
+  seenIds: new Set<string>(),
+  duplicateSlugs: [] as string[],
+  duplicateIds: [] as string[],
+  missingMetadataSlugs: [] as string[],
+  warnings: [] as string[],
+};
+
+export const FRAMES: Frame[] = RAW_FRAMES.map((item, idx) =>
+  normalizeFrameInput(item, idx, REGISTRY_STATE)
+);
+
+/** Lookup map indexing every frame by canonical slug, id, short id, and alias. */
+export const FRAME_REGISTRY = new Map<string, Frame>();
+
+function indexFrameInRegistry(frame: Frame): void {
+  FRAME_REGISTRY.set(frame.slug, frame);
+  FRAME_REGISTRY.set(frame.id.toLowerCase(), frame);
+  const shortId = frame.id.replace(/^f-/i, "").toLowerCase();
+  if (!FRAME_REGISTRY.has(shortId)) {
+    FRAME_REGISTRY.set(shortId, frame);
+  }
+  for (const alias of frame.aliases ?? []) {
+    const key = alias.toLowerCase();
+    if (!FRAME_REGISTRY.has(key)) {
+      FRAME_REGISTRY.set(key, frame);
+    }
+  }
+}
+
+for (const frame of FRAMES) {
+  indexFrameInRegistry(frame);
+}
+
+/**
+ * Dynamically registers a new frame definition into the single source of truth.
+ * Automatically normalizes slug/ID/category/style and updates `FRAMES` + `FRAME_REGISTRY`.
+ */
+export function registerFrame(input: FrameInput): Frame {
+  const frame = normalizeFrameInput(input, FRAMES.length, REGISTRY_STATE);
+  FRAMES.push(frame);
+  indexFrameInRegistry(frame);
+  return frame;
+}
+
+/** Returns all registered frames from the centralized registry. */
+export function getAllFrames(): Frame[] {
+  return FRAMES;
+}
+
+/**
+ * Resolves any frame by slug, id (`f-...`), short id, title slug, or alias.
+ * Tolerates URL encoding, uppercase letters, whitespace, and underscores.
+ */
+export function getFrame(slugOrId: string | null | undefined): Frame | undefined {
+  if (!slugOrId || typeof slugOrId !== "string") return undefined;
+  let decoded = slugOrId.trim();
+  try {
+    decoded = decodeURIComponent(decoded).trim();
+  } catch {
+    /* keep raw */
+  }
+  const lower = decoded.toLowerCase();
+  const direct = FRAME_REGISTRY.get(lower);
+  if (direct) return direct;
+
+  const normalized = normalizeSlug(decoded);
+  if (!normalized) return undefined;
+  return (
+    FRAME_REGISTRY.get(normalized) ??
+    FRAME_REGISTRY.get(normalized.replace(/^f-/, ""))
+  );
+}
+
+/** Resolves any slug/id/alias to the frame's canonical slug. */
+export function resolveFrameSlug(slugOrId: string | null | undefined): string | undefined {
+  return getFrame(slugOrId)?.slug;
+}
+
+/**
+ * Returns the complete list of filterable occasions for the Gallery.
+ * Always includes the 6 core `OCCASIONS` plus any additional category (such as
+ * `"General"` when a frame has missing category metadata, or custom occasions).
+ */
+export function getAvailableOccasions(
+  frames: ReadonlyArray<{ category?: string; occasion?: string }> = FRAMES
+): Occasion[] {
+  const seen = new Set<string>(BASE_OCCASIONS);
+  const result: Occasion[] = [...BASE_OCCASIONS];
+
+  for (const f of frames) {
+    const cat = (f.category || f.occasion || DEFAULT_OCCASION).toString().trim();
+    if (cat && !seen.has(cat)) {
+      seen.add(cat);
+      result.push(cat as Occasion);
+    }
+  }
+  return result;
+}
+
+/**
+ * Validates a list of frame inputs (defaults to the registered `RAW_FRAMES`)
+ * and verifies that every frame produces valid SVG output.
+ */
+export function validateFrameRegistry(
+  inputs: ReadonlyArray<FrameInput> = RAW_FRAMES
+): FrameRegistryReport {
+  const state = {
+    seenSlugs: new Set<string>(),
+    seenIds: new Set<string>(),
+    duplicateSlugs: [] as string[],
+    duplicateIds: [] as string[],
+    missingMetadataSlugs: [] as string[],
+    warnings: [] as string[],
+  };
+
+  const normalized = inputs.map((item, idx) => normalizeFrameInput(item, idx, state));
+
+  for (const f of normalized) {
+    const svg = buildFrameSVG(f);
+    const thumb = buildThumbSVG(f);
+    if (!svg.startsWith("<svg") || !svg.endsWith("</svg>") || svg.includes("undefined")) {
+      state.warnings.push(`Frame "${f.slug}" produced invalid composite SVG.`);
+    }
+    if (!thumb.startsWith("<svg") || !thumb.endsWith("</svg>") || thumb.includes("undefined")) {
+      state.warnings.push(`Frame "${f.slug}" produced invalid thumbnail SVG.`);
+    }
+  }
+
+  return {
+    valid: state.duplicateSlugs.length === 0 && state.duplicateIds.length === 0,
+    total: normalized.length,
+    uniqueSlugs: state.seenSlugs.size,
+    duplicateSlugs: state.duplicateSlugs,
+    duplicateIds: state.duplicateIds,
+    missingMetadataSlugs: state.missingMetadataSlugs,
+    warnings: state.warnings,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -276,7 +756,8 @@ export function getFrame(slug: string): Frame | undefined {
 /* ------------------------------------------------------------------ */
 
 function backdrop(frame: Frame): string {
-  const { accent, motif } = frame.style;
+  const style = { ...DEFAULT_FRAME_STYLE, ...(frame?.style ?? {}) };
+  const { accent, motif } = style;
   let deco = "";
 
   switch (motif) {
@@ -297,10 +778,11 @@ function backdrop(frame: Frame): string {
     case "petals":
       deco = Array.from({ length: 10 }, (_, i) => {
         const a = (i * 36 * Math.PI) / 180;
-        return `<ellipse cx="${(500 + Math.cos(a) * 420).toFixed(0)}" cy="${(625 + Math.sin(a) * 420).toFixed(0)}" rx="14" ry="34" fill="${accent}" fill-opacity="0.15" transform="rotate(${i * 36} ${ (500 + Math.cos(a) * 420).toFixed(0)} ${(625 + Math.sin(a) * 420).toFixed(0)})"/>`;
+        return `<ellipse cx="${(500 + Math.cos(a) * 420).toFixed(0)}" cy="${(625 + Math.sin(a) * 420).toFixed(0)}" rx="14" ry="34" fill="${accent}" fill-opacity="0.15" transform="rotate(${i * 36} ${(500 + Math.cos(a) * 420).toFixed(0)} ${(625 + Math.sin(a) * 420).toFixed(0)})"/>`;
       }).join("");
       break;
     case "rings":
+    default:
       deco = [130, 210, 290, 370]
         .map(
           (r) =>
@@ -339,8 +821,9 @@ function backdrop(frame: Frame): string {
 /* ------------------------------------------------------------------ */
 
 function centerArt(frame: Frame, cy: number): string {
-  const { accent, ink } = frame.style;
-  switch (frame.art) {
+  const style = { ...DEFAULT_FRAME_STYLE, ...(frame?.style ?? {}) };
+  const { accent, ink } = style;
+  switch (frame?.art) {
     case "sun":
       return `
         <g stroke="${accent}" stroke-width="7" stroke-linecap="round" opacity="0.9">
@@ -352,6 +835,7 @@ function centerArt(frame: Frame, cy: number): string {
         <circle cx="500" cy="${cy}" r="48" fill="${accent}"/>
         <circle cx="500" cy="${cy}" r="48" fill="none" stroke="${ink}" stroke-opacity="0.25" stroke-width="4"/>`;
     case "lotus":
+    default:
       return `
         <g fill="${accent}">
           <ellipse cx="500" cy="${cy + 18}" rx="88" ry="34" fill-opacity="0.95"/>
@@ -409,11 +893,13 @@ function centerArt(frame: Frame, cy: number): string {
 /* ------------------------------------------------------------------ */
 
 function overlay(frame: Frame, caption?: string): string {
-  const { accent, ink } = frame.style;
+  const style = { ...DEFAULT_FRAME_STYLE, ...(frame?.style ?? {}) };
+  const { accent, ink } = style;
+  const title = (frame?.title ?? "ZenFrame").toString();
   return `
     <g>${centerArt(frame, 1105)}</g>
     <text x="500" y="1216" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
-      font-size="46" letter-spacing="6" fill="${ink}">${esc(frame.title.toUpperCase())}</text>
+      font-size="46" letter-spacing="6" fill="${ink}">${esc(title.toUpperCase())}</text>
     <rect x="420" y="1238" width="160" height="5" rx="2.5" fill="${accent}"/>
     <text x="500" y="90" text-anchor="middle" font-family="Arial, sans-serif" font-weight="bold"
       font-size="30" letter-spacing="10" fill="${ink}" fill-opacity="0.55">${BRAND}</text>
@@ -431,7 +917,7 @@ function quote(s: string): string {
 }
 
 function esc(s: string): string {
-  return s
+  return String(s ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -448,17 +934,18 @@ export function buildFrameSVG(
   photoHref?: string,
   caption?: string
 ): string {
+  const style = { ...DEFAULT_FRAME_STYLE, ...(frame?.style ?? {}) };
   const photo = photoHref
-    ? `<image href="${photoHref}" x="150" y="250" width="700" height="700" preserveAspectRatio="xMidYMid slice"/>`
+    ? `<image href="${esc(photoHref)}" x="150" y="250" width="700" height="700" preserveAspectRatio="xMidYMid slice"/>`
     : `<rect x="150" y="250" width="700" height="700" rx="24" fill="#ffffff" fill-opacity="0.5"/>
-       <text x="500" y="610" text-anchor="middle" font-family="Arial, sans-serif" font-size="30" fill="${frame.style.ink}" fill-opacity="0.5">Your photo goes here</text>
+       <text x="500" y="610" text-anchor="middle" font-family="Arial, sans-serif" font-size="30" fill="${style.ink}" fill-opacity="0.5">Your photo goes here</text>
        <text x="500" y="650" text-anchor="middle" font-family="Arial, sans-serif" font-size="46">🌿</text>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1000" height="1250" viewBox="0 0 1000 1250">
   <defs>
     <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="${frame.style.from}"/>
-      <stop offset="1" stop-color="${frame.style.to}"/>
+      <stop offset="0" stop-color="${style.from}"/>
+      <stop offset="1" stop-color="${style.to}"/>
     </linearGradient>
   </defs>
   <g>${backdrop(frame)}</g>
@@ -469,23 +956,26 @@ export function buildFrameSVG(
 
 /** Small standalone SVG used as a gallery thumbnail (no photo, compact). */
 export function buildThumbSVG(frame: Frame): string {
+  const style = { ...DEFAULT_FRAME_STYLE, ...(frame?.style ?? {}) };
+  const title = (frame?.title ?? "ZenFrame").toString();
   return `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="375" viewBox="0 0 1000 1250">
   <defs>
     <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="${frame.style.from}"/>
-      <stop offset="1" stop-color="${frame.style.to}"/>
+      <stop offset="0" stop-color="${style.from}"/>
+      <stop offset="1" stop-color="${style.to}"/>
     </linearGradient>
   </defs>
   <g>${backdrop(frame)}</g>
   <g transform="translate(0 -160)">${centerArt(frame, 625)}</g>
-  <text x="500" y="1010" text-anchor="middle" font-family="Georgia, serif" font-size="44" letter-spacing="4" fill="${frame.style.ink}">${esc(shortTitle(frame.title))}</text>
+  <text x="500" y="1010" text-anchor="middle" font-family="Georgia, serif" font-size="44" letter-spacing="4" fill="${style.ink}">${esc(shortTitle(title))}</text>
 </svg>`;
 }
 
 function shortTitle(t: string): string {
-  const words = t.toUpperCase().split(" ");
-  if (words.length <= 1 || t.length <= 12) return esc(t.toUpperCase());
-  return esc(words.slice(0, 2).join(" "));
+  const clean = String(t ?? "").trim().toUpperCase();
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length <= 1 || clean.length <= 12) return clean;
+  return words.slice(0, 2).join(" ");
 }
 
 export const svgToDataURI = (svg: string): string =>

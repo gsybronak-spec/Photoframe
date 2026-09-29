@@ -378,6 +378,87 @@ function makePgDb(execQuery: (sql: string, params: DbValue[]) => Promise<unknown
 /* SQLite migrations (unchanged — development engine)                  */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* Campaign studio tables (shared by SQLite migration 9 and Postgres)  */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Campaigns are admin-composed photo-frame events: an uploaded artwork base
+ * layer, an optional Photo Area mask and an optional Name Area typography
+ * overlay. Users composite their photo locally in the browser — user photos
+ * are NEVER uploaded or stored. Anonymous generate/share events are the only
+ * user-side signal recorded.
+ */
+export const CAMPAIGN_TABLES_SQL = String.raw`
+CREATE TABLE IF NOT EXISTS campaigns (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  slug          TEXT NOT NULL UNIQUE,
+  district      TEXT,
+  description   TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'draft'
+                CHECK (status IN ('draft','active','paused','archived')),
+  artwork_key   TEXT,
+  artwork_mime  TEXT,
+  artwork_bytes INTEGER NOT NULL DEFAULT 0,
+  canvas_width  INTEGER NOT NULL DEFAULT 1080,
+  canvas_height INTEGER NOT NULL DEFAULT 1350,
+  art_x         REAL NOT NULL DEFAULT 0,
+  art_y         REAL NOT NULL DEFAULT 0,
+  art_w         REAL NOT NULL DEFAULT 100,
+  art_h         REAL NOT NULL DEFAULT 100,
+  art_rotation  REAL NOT NULL DEFAULT 0,
+  created_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+  activated_at  TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS campaign_photo_configs (
+  campaign_id TEXT PRIMARY KEY REFERENCES campaigns(id) ON DELETE CASCADE,
+  enabled     INTEGER NOT NULL DEFAULT 0,
+  shape       TEXT NOT NULL DEFAULT 'square' CHECK (shape IN ('circle','square')),
+  x           REAL NOT NULL DEFAULT 30,
+  y           REAL NOT NULL DEFAULT 35,
+  width       REAL NOT NULL DEFAULT 40,
+  height      REAL NOT NULL DEFAULT 30,
+  rotation    REAL NOT NULL DEFAULT 0,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS campaign_name_configs (
+  campaign_id    TEXT PRIMARY KEY REFERENCES campaigns(id) ON DELETE CASCADE,
+  enabled        INTEGER NOT NULL DEFAULT 0,
+  x              REAL NOT NULL DEFAULT 20,
+  y              REAL NOT NULL DEFAULT 78,
+  width          REAL NOT NULL DEFAULT 60,
+  height         REAL NOT NULL DEFAULT 12,
+  rotation       REAL NOT NULL DEFAULT 0,
+  font_family    TEXT NOT NULL DEFAULT 'Plus Jakarta Sans',
+  font_size      REAL NOT NULL DEFAULT 26,
+  font_color     TEXT NOT NULL DEFAULT '#fff8f0',
+  font_weight    TEXT NOT NULL DEFAULT 'bold' CHECK (font_weight IN ('normal','bold')),
+  alignment      TEXT NOT NULL DEFAULT 'center' CHECK (alignment IN ('left','center','right')),
+  letter_spacing REAL NOT NULL DEFAULT 1,
+  updated_at     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS campaign_events (
+  id          TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  event_type  TEXT NOT NULL
+              CHECK (event_type IN ('generate','download','whatsapp','facebook','instagram','link')),
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_events
+  ON campaign_events(campaign_id, event_type, created_at DESC);
+`;
+
+/** Campaign tables as their own idempotent unit, so an existing Postgres
+ *  database created from the pre-campaign baseline can be upgraded in place. */
+export const POSTGRES_CAMPAIGNS_SCHEMA = CAMPAIGN_TABLES_SQL;
+
 /** Columns of a table, used to make ADD COLUMN migrations idempotent. */
 function columns(db: DatabaseSync, table: string): string[] {
   try {
@@ -652,6 +733,15 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 9,
+    name: "campaign_studio",
+    up(db) {
+      // Admin campaign studio + anonymous user wizard (artwork base layer,
+      // photo mask, name overlay, anonymous generate/share events).
+      db.exec(CAMPAIGN_TABLES_SQL);
+    },
+  },
 ];
 
 /** Tables that must exist once migrations have run. */
@@ -668,6 +758,10 @@ const REQUIRED_TABLES = [
   "subscriptions",
   "analytics_events",
   "email_deliveries",
+  "campaigns",
+  "campaign_photo_configs",
+  "campaign_name_configs",
+  "campaign_events",
   "schema_migrations",
 ];
 
@@ -698,6 +792,22 @@ export function assertSchemaIntegrity(db: DatabaseSync): void {
       "visibility",
       "share_slug",
       "share_show_caption",
+      "created_at",
+      "updated_at",
+    ],
+    campaigns: [
+      "id",
+      "name",
+      "slug",
+      "status",
+      "artwork_key",
+      "canvas_width",
+      "canvas_height",
+      "art_x",
+      "art_y",
+      "art_w",
+      "art_h",
+      "art_rotation",
       "created_at",
       "updated_at",
     ],
@@ -848,8 +958,18 @@ async function ensurePgSchema(pool: import("pg").Pool): Promise<void> {
     const exists = await client.query<{ present: unknown }>(
       "SELECT to_regclass('public.users') AS present"
     );
-    if (exists.rows[0]?.present) return; // schema already applied
+    if (exists.rows[0]?.present) {
+      // Database predates the campaign studio? Upgrade in place (idempotent).
+      const camp = await client.query<{ present: unknown }>(
+        "SELECT to_regclass('public.campaigns') AS present"
+      );
+      if (!camp.rows[0]?.present) {
+        await client.query(POSTGRES_CAMPAIGNS_SCHEMA);
+      }
+      return;
+    }
     await client.query(POSTGRES_BASELINE_SCHEMA);
+    await client.query(POSTGRES_CAMPAIGNS_SCHEMA);
     await client.query(
       `INSERT INTO schema_migrations (version, name, applied_at)
        SELECT 1, 'postgres_baseline', $1

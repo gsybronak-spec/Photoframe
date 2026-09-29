@@ -13,9 +13,13 @@
 
 import { getDb, nowIso } from "./db";
 import {
-  FRAMES,
   OCCASIONS,
+  DEFAULT_OCCASION,
   codeMeta,
+  getAllFrames,
+  getFrame,
+  resolveFrameSlug,
+  getAvailableOccasions,
   toCatalogFrame,
   type CatalogFrame,
   type Frame,
@@ -28,9 +32,21 @@ interface OverrideRow {
   description: string | null;
   category: string | null;
   tags: string | null;
-  featured: number | null;
-  active: number | null;
+  featured: number | boolean | string | null;
+  active: number | boolean | string | null;
   updated_at: string;
+}
+
+function toOptionalBool(val: unknown): boolean | undefined {
+  if (val === null || val === undefined) return undefined;
+  if (typeof val === "boolean") return val;
+  if (typeof val === "number") return val === 1;
+  if (typeof val === "string") {
+    const norm = val.trim().toLowerCase();
+    if (norm === "1" || norm === "true") return true;
+    if (norm === "0" || norm === "false") return false;
+  }
+  return undefined;
 }
 
 async function overrides(): Promise<Map<string, OverrideRow>> {
@@ -38,7 +54,15 @@ async function overrides(): Promise<Map<string, OverrideRow>> {
   const rows = (await db
     .prepare("SELECT * FROM frame_overrides")
     .all()) as OverrideRow[];
-  return new Map(rows.map((r) => [r.frame_id, r]));
+  const map = new Map<string, OverrideRow>();
+  for (const r of rows) {
+    map.set(r.frame_id, r);
+    const canonical = resolveFrameSlug(r.frame_id);
+    if (canonical && !map.has(canonical)) {
+      map.set(canonical, r);
+    }
+  }
+  return map;
 }
 
 function parseTags(raw: string | null): string[] | null {
@@ -46,11 +70,12 @@ function parseTags(raw: string | null): string[] | null {
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return null;
-    return parsed
+    const cleaned = parsed
       .filter((t): t is string => typeof t === "string")
       .map((t) => cleanText(t, 24))
       .filter(Boolean)
       .slice(0, 8);
+    return cleaned.length > 0 ? cleaned : null;
   } catch {
     return null;
   }
@@ -59,11 +84,13 @@ function parseTags(raw: string | null): string[] | null {
 function merge(frame: Frame, row?: OverrideRow): CatalogFrame {
   if (!row) return toCatalogFrame(frame);
   const tags = parseTags(row.tags);
+  const cleanCat = row.category ? cleanText(row.category, 40) : "";
+  const cleanDesc = row.description ? cleanMultiline(row.description, 320) : "";
   return toCatalogFrame(frame, {
-    active: row.active === null ? undefined : row.active === 1,
-    featured: row.featured === null ? undefined : row.featured === 1,
-    description: row.description ? cleanMultiline(row.description, 320) : undefined,
-    category: (row.category as Occasion) ?? undefined,
+    active: toOptionalBool(row.active),
+    featured: toOptionalBool(row.featured),
+    description: cleanDesc || undefined,
+    category: (cleanCat as Occasion) || undefined,
     tags: tags ?? undefined,
     updated_at: row.updated_at,
     overridden: true,
@@ -73,12 +100,12 @@ function merge(frame: Frame, row?: OverrideRow): CatalogFrame {
 /** Every frame, including inactive ones (admin view). */
 export async function getCatalog(): Promise<CatalogFrame[]> {
   const rows = await overrides();
-  return FRAMES.map((f) => merge(f, rows.get(f.slug)));
+  return getAllFrames().map((f) => merge(f, rows.get(f.slug) ?? rows.get(f.id)));
 }
 
 /** Public gallery: active frames only. */
 export async function getPublicFrames(): Promise<CatalogFrame[]> {
-  return (await getCatalog()).filter((f) => f.active);
+  return (await getCatalog()).filter((f) => f.active !== false);
 }
 
 /** Homepage rail. Falls back to `trending` flags when nothing is featured. */
@@ -96,9 +123,10 @@ export async function findFrame(
   slug: string,
   opts: { includeInactive?: boolean } = {}
 ): Promise<CatalogFrame | undefined> {
-  const base = FRAMES.find((f) => f.slug === slug);
+  const base = getFrame(slug);
   if (!base) return undefined;
-  const merged = merge(base, (await overrides()).get(base.slug));
+  const rows = await overrides();
+  const merged = merge(base, rows.get(base.slug) ?? rows.get(base.id));
   if (!opts.includeInactive && !merged.active) return undefined;
   return merged;
 }
@@ -120,19 +148,36 @@ export interface FramePatch {
   active?: boolean;
 }
 
-const VALID_CATEGORIES = new Set<string>(OCCASIONS);
-
 export async function updateFrame(
   slug: string,
   patch: FramePatch,
   adminId: string
 ): Promise<CatalogFrame | null> {
-  const base = FRAMES.find((f) => f.slug === slug);
+  const base = getFrame(slug);
   if (!base) return null;
 
+  const canonicalSlug = base.slug;
+  const validCategories = new Set<string>([
+    ...OCCASIONS,
+    ...getAvailableOccasions(),
+    DEFAULT_OCCASION,
+  ]);
+
   const db = await getDb();
-  const current = (await overrides()).get(slug);
+  const rows = await overrides();
+  const current = rows.get(canonicalSlug) ?? rows.get(base.id);
   const defaults = codeMeta(base);
+
+  const cleanedTags =
+    patch.tags !== undefined
+      ? patch.tags
+          .map((t) => cleanText(t, 24))
+          .filter(Boolean)
+          .slice(0, 8)
+      : null;
+
+  const currentActive = toOptionalBool(current?.active);
+  const currentFeatured = toOptionalBool(current?.featured);
 
   const next = {
     description:
@@ -142,23 +187,35 @@ export async function updateFrame(
     category:
       patch.category === undefined
         ? (current?.category ?? null)
-        : VALID_CATEGORIES.has(patch.category)
+        : validCategories.has(patch.category)
           ? patch.category
           : (current?.category ?? null),
     tags:
       patch.tags === undefined
         ? (current?.tags ?? null)
-        : JSON.stringify(
-            patch.tags.map((t) => cleanText(t, 24)).filter(Boolean).slice(0, 8)
-          ),
+        : cleanedTags && cleanedTags.length > 0
+          ? JSON.stringify(cleanedTags)
+          : null,
     featured:
       patch.featured === undefined
-        ? (current?.featured ?? null)
+        ? currentFeatured === undefined
+          ? null
+          : currentFeatured
+            ? 1
+            : 0
         : patch.featured
           ? 1
           : 0,
     active:
-      patch.active === undefined ? (current?.active ?? null) : patch.active ? 1 : 0,
+      patch.active === undefined
+        ? currentActive === undefined
+          ? null
+          : currentActive
+            ? 1
+            : 0
+        : patch.active
+          ? 1
+          : 0,
   };
 
   // If every value matches the code default, drop the override row entirely so
@@ -171,7 +228,9 @@ export async function updateFrame(
     next.tags === null;
 
   if (matchesDefaults) {
-    await db.prepare("DELETE FROM frame_overrides WHERE frame_id = ?").run(slug);
+    await db
+      .prepare("DELETE FROM frame_overrides WHERE frame_id = ? OR frame_id = ?")
+      .run(canonicalSlug, base.id);
   } else {
     await db
       .prepare(
@@ -187,7 +246,7 @@ export async function updateFrame(
          updated_by  = excluded.updated_by`
       )
       .run(
-        slug,
+        canonicalSlug,
         next.description,
         next.category,
         next.tags,
@@ -198,7 +257,7 @@ export async function updateFrame(
       );
   }
 
-  return (await findFrame(slug, { includeInactive: true })) ?? null;
+  return (await findFrame(canonicalSlug, { includeInactive: true })) ?? null;
 }
 
 /* ------------------------------------------------------------------ */

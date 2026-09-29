@@ -1,19 +1,18 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { OCCASIONS } from "@/lib/frames";
+import { FRAMES, getAvailableOccasions } from "@/lib/frames";
 import { getPublicFrames } from "@/server/frame-catalog";
 import { GalleryGrid } from "@/components/GalleryGrid";
 import { Reveal } from "@/components/Reveal";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://zenframe.in";
 
-/** Catalogue changes (featured/active) surface within five minutes. */
-export const revalidate = 300;
+/** Always reflect the current frame registry and active DB overrides immediately. */
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Yoga photo frame gallery",
-  description:
-    "Browse 16 hand-crafted yoga photo frames — sunrise flows, meditation, chakra alignment and moonlit savasana. Upload your photo, personalize it and download instantly.",
+  description: `Browse ${FRAMES.length} hand-crafted yoga photo frames — sunrise flows, meditation, chakra alignment and moonlit savasana. Upload your photo, personalize it and download instantly.`,
   keywords: [
     "yoga photo frames",
     "meditation frames",
@@ -33,12 +32,13 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Yoga photo frame gallery | ZenFrame",
-    description: "16 hand-crafted yoga frames — pick one and make it yours.",
+    description: `${FRAMES.length} hand-crafted yoga frames — pick one and make it yours.`,
   },
 };
 
 export default async function FramesPage() {
   const frames = await getPublicFrames();
+  const occasions = getAvailableOccasions(frames);
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -46,7 +46,7 @@ export default async function FramesPage() {
     name: "ZenFrame yoga photo frame gallery",
     url: `${SITE_URL}/frames`,
     description: "A curated collection of hand-crafted yoga photo frames.",
-    hasPart: frames.slice(0, 20).map((f) => ({
+    hasPart: frames.map((f) => ({
       "@type": "CreativeWork",
       name: f.title,
       url: `${SITE_URL}/frames/${f.slug}`,
@@ -79,7 +79,7 @@ export default async function FramesPage() {
           </div>
         }
       >
-        <GalleryGrid frames={frames} occasions={OCCASIONS} />
+        <GalleryGrid frames={frames} occasions={occasions} />
       </Suspense>
     </div>
   );

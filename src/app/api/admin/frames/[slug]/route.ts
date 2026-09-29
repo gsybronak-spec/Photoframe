@@ -1,3 +1,4 @@
+import { revalidatePath } from "next/cache";
 import { requireAdmin, ok, fail, assertSameOrigin, guardRate, readJson, serverError } from "@/server/api";
 import { updateFrame, type FramePatch } from "@/server/frame-catalog";
 import { logEvent } from "@/server/activity";
@@ -54,11 +55,19 @@ export async function PATCH(
     const updated = await updateFrame(safeSlug, patch, admin.id);
     if (!updated) return fail("Unknown frame.", "NOT_FOUND");
 
+    try {
+      revalidatePath("/");
+      revalidatePath("/frames");
+      revalidatePath(`/frames/${updated.slug}`);
+    } catch {
+      // Ignore if called outside static generation context
+    }
+
     await logEvent(
       admin.id,
       "admin_action",
       `Updated frame “${updated.title}”`,
-      { frame: safeSlug, fields: Object.keys(patch) },
+      { frame: updated.slug, fields: Object.keys(patch) },
       admin.id
     );
 

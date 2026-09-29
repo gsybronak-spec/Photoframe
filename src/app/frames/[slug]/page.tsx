@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Clock, ShieldCheck } from "lucide-react";
-import { FRAMES, buildThumbSVG, svgToDataURI, type Frame } from "@/lib/frames";
+import { getAllFrames, buildThumbSVG, svgToDataURI, type Frame } from "@/lib/frames";
 import { findFrame, getPublicFrames } from "@/server/frame-catalog";
 import { FrameEditor } from "@/components/FrameEditor";
 import { FrameCard } from "@/components/FrameCard";
@@ -10,11 +10,11 @@ import { Reveal } from "@/components/Reveal";
 import { ViewTracker } from "@/components/ViewTracker";
 
 export function generateStaticParams() {
-  return FRAMES.map((f) => ({ slug: f.slug }));
+  return getAllFrames().map((f) => ({ slug: f.slug }));
 }
 
-/** Picks up admin metadata/active changes without a rebuild. */
-export const revalidate = 300;
+export const dynamicParams = true;
+export const dynamic = "force-dynamic";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://zenframe.in";
 
@@ -33,7 +33,7 @@ export async function generateMetadata({
   return {
     title,
     description,
-    keywords: [...frame.tags, "yoga photo frame", frame.category].join(", "),
+    keywords: [...frame.tags, "yoga photo frame", frame.category || "General"].join(", "),
     alternates: { canonical: `/frames/${frame.slug}` },
     openGraph: {
       title: `${frame.title} | ZenFrame`,
@@ -69,8 +69,10 @@ export default async function FramePage({
   const frame = await findFrame(slug);
   if (!frame) notFound();
 
+  const categoryLabel = frame.category || "General";
+
   const related = (await getPublicFrames())
-    .filter((f) => f.category === frame.category && f.slug !== frame.slug)
+    .filter((f) => (f.category || "General") === categoryLabel && f.slug !== frame.slug)
     .slice(0, 4);
 
   const thumb = svgToDataURI(buildThumbSVG(frame as Frame));
@@ -80,7 +82,7 @@ export default async function FramePage({
     "@type": "CreativeWork",
     name: `${frame.title} — Yoga Photo Frame`,
     description: frame.description,
-    genre: frame.category,
+    genre: categoryLabel,
     keywords: frame.tags.join(", "),
     url: `${SITE_URL}/frames/${frame.slug}`,
     image: `${SITE_URL}/frames/${frame.slug}/og`,
@@ -107,7 +109,7 @@ export default async function FramePage({
         <div className="mt-6 flex flex-wrap items-end justify-between gap-6">
           <div>
             <span className="glass inline-block rounded-full px-4 py-1.5 text-xs font-semibold text-teal-deep">
-              {frame.category}
+              {categoryLabel}
             </span>
             <h1 className="mt-4 font-display text-5xl font-semibold text-ink">
               {frame.title}
@@ -142,11 +144,11 @@ export default async function FramePage({
       {related.length > 0 && (
         <section className="mt-20">
           <h2 className="font-display text-3xl font-semibold text-ink">
-            More {frame.category.toLowerCase()} frames
+            More {categoryLabel.toLowerCase()} frames
           </h2>
           <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {related.map((f, i) => (
-              <Reveal key={f.id} delay={i * 0.08}>
+              <Reveal key={f.slug} delay={i * 0.08}>
                 <FrameCard frame={f} />
               </Reveal>
             ))}

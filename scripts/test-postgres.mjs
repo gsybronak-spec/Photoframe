@@ -275,7 +275,7 @@ for (const t of REQUIRED) {
 // baseline (drift guard — the embedded copy is what the runtime applies).
 const sqlFile = path.join(ROOT, "db", "schema-postgres.sql");
 if (fs.existsSync(sqlFile)) {
-  const { POSTGRES_BASELINE_SCHEMA } = await import(
+  const { POSTGRES_BASELINE_SCHEMA, POSTGRES_CAMPAIGNS_SCHEMA } = await import(
     `file://${path.join(ROOT, "src/server/db.ts").replace(/\\/g, "/")}`
   );
   const fileSql = fs.readFileSync(sqlFile, "utf8");
@@ -288,7 +288,7 @@ if (fs.existsSync(sqlFile)) {
       .trim();
   check(
     "schema-postgres.sql matches embedded baseline (no drift)",
-    norm(fileSql) === norm(POSTGRES_BASELINE_SCHEMA)
+    norm(fileSql) === norm(`${POSTGRES_BASELINE_SCHEMA}\n${POSTGRES_CAMPAIGNS_SCHEMA}`)
   );
 }
 

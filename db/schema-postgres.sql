@@ -163,3 +163,70 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   name       TEXT NOT NULL,
   applied_at TEXT NOT NULL
 );
+
+-- ------------------------------------------------------------------
+-- Campaign studio (admin campaign composer + anonymous user wizard)
+-- ------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS campaigns (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL,
+  slug          TEXT NOT NULL UNIQUE,
+  district      TEXT,
+  description   TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'draft'
+                CHECK (status IN ('draft','active','paused','archived')),
+  artwork_key   TEXT,
+  artwork_mime  TEXT,
+  artwork_bytes INTEGER NOT NULL DEFAULT 0,
+  canvas_width  INTEGER NOT NULL DEFAULT 1080,
+  canvas_height INTEGER NOT NULL DEFAULT 1350,
+  art_x         REAL NOT NULL DEFAULT 0,
+  art_y         REAL NOT NULL DEFAULT 0,
+  art_w         REAL NOT NULL DEFAULT 100,
+  art_h         REAL NOT NULL DEFAULT 100,
+  art_rotation  REAL NOT NULL DEFAULT 0,
+  created_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+  activated_at  TEXT,
+  created_at    TEXT NOT NULL,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_campaigns_status ON campaigns(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS campaign_photo_configs (
+  campaign_id TEXT PRIMARY KEY REFERENCES campaigns(id) ON DELETE CASCADE,
+  enabled     INTEGER NOT NULL DEFAULT 0,
+  shape       TEXT NOT NULL DEFAULT 'square' CHECK (shape IN ('circle','square')),
+  x           REAL NOT NULL DEFAULT 30,
+  y           REAL NOT NULL DEFAULT 35,
+  width       REAL NOT NULL DEFAULT 40,
+  height      REAL NOT NULL DEFAULT 30,
+  rotation    REAL NOT NULL DEFAULT 0,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS campaign_name_configs (
+  campaign_id    TEXT PRIMARY KEY REFERENCES campaigns(id) ON DELETE CASCADE,
+  enabled        INTEGER NOT NULL DEFAULT 0,
+  x              REAL NOT NULL DEFAULT 20,
+  y              REAL NOT NULL DEFAULT 78,
+  width          REAL NOT NULL DEFAULT 60,
+  height         REAL NOT NULL DEFAULT 12,
+  rotation       REAL NOT NULL DEFAULT 0,
+  font_family    TEXT NOT NULL DEFAULT 'Plus Jakarta Sans',
+  font_size      REAL NOT NULL DEFAULT 26,
+  font_color     TEXT NOT NULL DEFAULT '#fff8f0',
+  font_weight    TEXT NOT NULL DEFAULT 'bold' CHECK (font_weight IN ('normal','bold')),
+  alignment      TEXT NOT NULL DEFAULT 'center' CHECK (alignment IN ('left','center','right')),
+  letter_spacing REAL NOT NULL DEFAULT 1,
+  updated_at     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS campaign_events (
+  id          TEXT PRIMARY KEY,
+  campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+  event_type  TEXT NOT NULL
+              CHECK (event_type IN ('generate','download','whatsapp','facebook','instagram','link')),
+  created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_campaign_events
+  ON campaign_events(campaign_id, event_type, created_at DESC);

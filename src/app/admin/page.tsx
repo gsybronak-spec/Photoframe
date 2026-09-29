@@ -22,6 +22,7 @@ import { analyticsSummary, analyticsTotal } from "@/server/analytics";
 import { getCatalog, getSettings } from "@/server/frame-catalog";
 import { Reveal } from "@/components/Reveal";
 import { AdminUsersPanel } from "@/components/admin/AdminUsersPanel";
+import { AdminCampaignsPanel } from "@/components/admin/AdminCampaignsPanel";
 import { AdminFramesPanel } from "@/components/admin/AdminFramesPanel";
 import { AdminActivityPanel } from "@/components/admin/AdminActivityPanel";
 import { AdminContentPanel } from "@/components/admin/AdminContentPanel";
@@ -34,6 +35,7 @@ const TABS = [
   { id: "overview", label: "Dashboard" },
   { id: "users", label: "Users" },
   { id: "frames", label: "Frames" },
+  { id: "campaigns", label: "Campaigns" },
   { id: "activity", label: "Activity" },
   { id: "content", label: "Content" },
 ] as const;
@@ -185,6 +187,7 @@ export default async function AdminPage({
       <div className="mt-8">
         {tab === "users" && <AdminUsersPanel currentAdminId={user.id} />}
         {tab === "frames" && <AdminFramesPanel />}
+        {tab === "campaigns" && <AdminCampaignsPanel />}
         {tab === "activity" && <AdminActivityPanel />}
         {tab === "content" && <AdminContentPanel />}
 

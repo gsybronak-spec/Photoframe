@@ -1,6 +1,6 @@
 import { requireAdmin, ok, serverError } from "@/server/api";
 import { getCatalog, getSettings, featuredSlugs } from "@/server/frame-catalog";
-import { OCCASIONS } from "@/lib/frames";
+import { getAvailableOccasions } from "@/lib/frames";
 
 /** GET /api/admin/frames — the full catalogue, including inactive frames. */
 export async function GET() {
@@ -23,7 +23,7 @@ export async function GET() {
         overridden: Boolean(f.overridden),
         updatedAt: f.updated_at ?? null,
       })),
-      categories: OCCASIONS,
+      categories: getAvailableOccasions(catalog),
       settings: await getSettings(),
       featured: await featuredSlugs(),
     });

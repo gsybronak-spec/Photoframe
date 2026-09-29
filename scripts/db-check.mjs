@@ -60,6 +60,10 @@ const tables = [
   "subscriptions",
   "analytics_events",
   "email_deliveries",
+  "campaigns",
+  "campaign_photo_configs",
+  "campaign_name_configs",
+  "campaign_events",
 ];
 console.log("  rows:");
 for (const t of tables) {

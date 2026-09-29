@@ -17,6 +17,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { validateFrameRegistry } from "@/lib/frames";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -173,6 +174,22 @@ export function validateProductionConfig(): void {
       "RATE_LIMIT_DRIVER=redis but UPSTASH_REDIS_REST_URL/TOKEN are missing — " +
         "falling back to the in-memory limiter (single-instance only)."
     );
+  }
+
+  /* --- Frame registry validation ----------------------------------------- */
+  const registryReport = validateFrameRegistry();
+  for (const w of registryReport.warnings) {
+    warn(`Frame registry warning: ${w}`);
+  }
+  if (!registryReport.valid) {
+    problems.push(
+      `Frame registry detected duplicate slugs/IDs: ${[
+        ...registryReport.duplicateSlugs,
+        ...registryReport.duplicateIds,
+      ].join(", ")}`
+    );
+  } else {
+    info(`frame registry: ${registryReport.total} frames verified & ready`);
   }
 
   /* --- Report ------------------------------------------------------------ */
