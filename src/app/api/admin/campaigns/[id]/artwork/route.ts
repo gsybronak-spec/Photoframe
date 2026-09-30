@@ -1,7 +1,5 @@
 import { requireAdmin, fail, serverError } from "@/server/api";
-import { getCampaignById } from "@/server/campaigns";
-import { getStorage } from "@/server/storage";
-import { getDb, nowIso } from "@/server/db";
+import { getCampaignById, resolveCampaignArtwork } from "@/server/campaigns";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -21,25 +19,17 @@ export async function GET(_req: Request, { params }: Params) {
       return fail("Artwork not found", "NOT_FOUND");
     }
 
-    const buf = await getStorage().get(campaign.artwork_key);
-    if (!buf) {
-      // Self-heal: if the stored object is gone (e.g. storage was rebuilt),
-      // clear the dead reference so the admin sees an honest state.
-      const db = await getDb();
-      await db
-        .prepare(
-          `UPDATE campaigns SET artwork_key = NULL, artwork_mime = NULL, artwork_bytes = 0, updated_at = ? WHERE id = ?`
-        )
-        .run(nowIso(), id);
+    const resolved = await resolveCampaignArtwork(campaign);
+    if (!resolved) {
       return fail("Artwork not found", "NOT_FOUND");
     }
 
-    const body = new Uint8Array(buf);
+    const body = new Uint8Array(resolved.buf);
     return new Response(body, {
       status: 200,
       headers: {
-        "Content-Type": campaign.artwork_mime ?? "image/png",
-        "Content-Length": String(buf.length),
+        "Content-Type": resolved.mime,
+        "Content-Length": String(resolved.buf.length),
         "Cache-Control": "private, max-age=0, must-revalidate",
       },
     });

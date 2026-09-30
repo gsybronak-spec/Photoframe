@@ -90,9 +90,20 @@ for (const frame of allFrames) {
   const thumbSvg = buildThumbSVG(frame);
   const dataUri = svgToDataURI(thumbSvg);
 
+  const cutoutSvg = buildFrameSVG(
+    frame,
+    "__cutout__",
+    "Namaste & Peace <2026>",
+    customDecimalSettings
+  );
+
   assert.ok(compositeSvg.startsWith("<svg") && compositeSvg.endsWith("</svg>"), `Invalid composite SVG for ${frame.slug}`);
   assert.ok(!compositeSvg.includes("undefined") && !compositeSvg.includes("NaN"), `Composite SVG contains undefined/NaN for ${frame.slug}`);
   assert.ok(!compositeSvg.includes("&amp;amp;"), `Double-escaped entity in composite SVG for ${frame.slug}`);
+
+  assert.ok(cutoutSvg.includes('fill-rule="evenodd"'), `Cutout SVG missing even-odd cutout window for ${frame.slug}`);
+  assert.ok(cutoutSvg.includes('id="frameOuterClip"'), `Cutout SVG missing outer clipPath for ${frame.slug}`);
+  assert.ok(!cutoutSvg.includes('fill="#ffffff" fill-opacity="0.5"'), `Cutout SVG must not block photo area with opaque rect for ${frame.slug}`);
 
   assert.ok(thumbSvg.startsWith("<svg") && thumbSvg.endsWith("</svg>"), `Invalid thumb SVG for ${frame.slug}`);
   assert.ok(!thumbSvg.includes("undefined") && !thumbSvg.includes("NaN"), `Thumb SVG contains undefined/NaN for ${frame.slug}`);

@@ -65,10 +65,10 @@ export async function POST(req: Request) {
       await db
         .prepare(
           `UPDATE campaigns
-              SET artwork_key = ?, artwork_mime = ?, artwork_bytes = ?, updated_at = ?
+              SET artwork_key = ?, artwork_mime = ?, artwork_bytes = ?, artwork_data = ?, updated_at = ?
             WHERE id = ?`
         )
-        .run(key, contentTypeFor(mime), stored.bytes, now, campaign.id);
+        .run(key, contentTypeFor(mime), stored.bytes, body.dataUrl, now, campaign.id);
     } catch (dbErr) {
       // Never leave orphaned objects behind when the row can't be updated.
       await deleteCreationImage(key);

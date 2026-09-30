@@ -13,7 +13,16 @@
 
 import { getDb, nowIso } from "./db";
 import { generateToken } from "./passwords";
-import { cleanDecimal, cleanText, roundDec } from "./validation";
+import { getStorage, putImage } from "./storage";
+import {
+  cleanDecimal,
+  cleanText,
+  contentTypeFor,
+  extensionFor,
+  imageMime,
+  parseDataUrl,
+  roundDec,
+} from "./validation";
 
 export type CampaignStatus = "draft" | "active" | "paused" | "archived";
 export const CAMPAIGN_STATUSES: CampaignStatus[] = [
@@ -232,7 +241,12 @@ interface ConfigDbRow {
 }
 
 const CAMPAIGN_SELECT = `
-  SELECT c.*,
+  SELECT c.id, c.name, c.slug, c.district, c.description, c.status,
+         COALESCE(c.artwork_key, CASE WHEN c.artwork_data IS NOT NULL OR c.status = 'active' THEN 'db-inline' ELSE NULL END) AS artwork_key,
+         c.artwork_mime, c.artwork_bytes,
+         c.canvas_width, c.canvas_height,
+         c.art_x, c.art_y, c.art_w, c.art_h, c.art_rotation,
+         c.created_by, c.activated_at, c.created_at, c.updated_at,
          p.enabled  AS p_enabled, p.shape  AS p_shape, p.x AS p_x, p.y AS p_y,
          p.width    AS p_w,       p.height AS p_h,     p.rotation AS p_rot,
          n.enabled  AS n_enabled, n.x      AS n_x, n.y AS n_y,
@@ -838,3 +852,117 @@ export async function distinctDistricts(): Promise<string[]> {
     .all()) as unknown as { district: string }[];
   return rows.map((r) => r.district);
 }
+
+function escapeXml(s: string): string {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildFallbackCampaignSvg(
+  campaign: CampaignRow & { photoConfig?: CampaignPhotoConfig | null }
+): string {
+  const W = Math.max(400, Number(campaign.canvas_width) || 1080);
+  const H = Math.max(400, Number(campaign.canvas_height) || 1350);
+  const p = campaign.photoConfig;
+  const px = p?.enabled ? Math.round((W * Number(p.x || 30)) / 100) : Math.round(W * 0.2);
+  const py = p?.enabled ? Math.round((H * Number(p.y || 35)) / 100) : Math.round(H * 0.24);
+  const pw = p?.enabled ? Math.round((W * Number(p.width || 40)) / 100) : Math.round(W * 0.6);
+  const ph = p?.enabled ? Math.round((H * Number(p.height || 30)) / 100) : Math.round(H * 0.48);
+  const title = escapeXml(campaign.name || "ZenFrame Campaign");
+  const sub = escapeXml(campaign.district || campaign.description || "Mindful Photo Frame");
+
+  // Even-odd path cuts a 100% transparent window where the user photo sits so
+  // the user's photo always shines through while decorative borders sit above.
+  const holePath =
+    p?.enabled && p.shape === "circle"
+      ? (() => {
+          const cx = px + pw / 2;
+          const cy = py + ph / 2;
+          const r = Math.min(pw, ph) / 2;
+          return `M0,0 H${W} V${H} H0 Z M${cx - r},${cy} a${r},${r} 0 1,0 ${r * 2},0 a${r},${r} 0 1,0 -${r * 2},0 Z`;
+        })()
+      : `M0,0 H${W} V${H} H0 Z M${px},${py} H${px + pw} V${py + ph} H${px} Z`;
+
+  const borderShape =
+    p?.enabled && p.shape === "circle"
+      ? `<circle cx="${px + pw / 2}" cy="${py + ph / 2}" r="${Math.min(pw, ph) / 2}" fill="none" stroke="#ff7e47" stroke-width="8"/>`
+      : `<rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="24" fill="none" stroke="#ff7e47" stroke-width="8"/>`;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
+  <defs>
+    <linearGradient id="cBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fff4e3"/>
+      <stop offset="100%" stop-color="#ffd5b8"/>
+    </linearGradient>
+  </defs>
+  <path d="${holePath}" fill="url(#cBg)" fill-rule="evenodd"/>
+  <rect x="28" y="28" width="${W - 56}" height="${H - 56}" rx="36" fill="none" stroke="#e56028" stroke-width="6" stroke-opacity="0.7"/>
+  <rect x="46" y="46" width="${W - 92}" height="${H - 92}" rx="28" fill="none" stroke="#f0b429" stroke-width="2.5" stroke-dasharray="10 8" stroke-opacity="0.75"/>
+  ${borderShape}
+  <text x="${W / 2}" y="${Math.max(110, Math.round(py * 0.52))}" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="${Math.round(W * 0.045)}" font-weight="800" fill="#17232b">${title}</text>
+  <text x="${W / 2}" y="${Math.max(155, Math.round(py * 0.52) + Math.round(W * 0.038))}" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="${Math.round(W * 0.025)}" font-weight="600" fill="#e56028" letter-spacing="3">${sub.toUpperCase()}</text>
+  <text x="${W / 2}" y="${H - 60}" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="${Math.round(W * 0.02)}" font-weight="700" fill="#0d4a52" letter-spacing="4">ZENFRAME STUDIO</text>
+</svg>`;
+}
+
+/**
+ * Resolves campaign artwork bytes across all storage engines:
+ *   1. Primary storage driver (Vercel Blob or local disk)
+ *   2. Database inline fallback (`campaigns.artwork_data`) for serverless cold starts
+ *   3. High-resolution SVG frame fallback if a pre-migration row lost its `/tmp` file
+ */
+export async function resolveCampaignArtwork(
+  campaign: CampaignRow & { photoConfig?: CampaignPhotoConfig | null }
+): Promise<{ buf: Buffer; mime: string } | null> {
+  if (!campaign.artwork_key) return null;
+
+  // 1. Primary storage driver
+  if (campaign.artwork_key !== "db-inline") {
+    const stored = await getStorage().get(campaign.artwork_key);
+    if (stored && stored.length > 0) {
+      return { buf: stored, mime: campaign.artwork_mime ?? "image/png" };
+    }
+  }
+
+  // 2. Database `artwork_data` fallback (survives serverless `/tmp` resets)
+  try {
+    const db = await getDb();
+    const row = (await db
+      .prepare("SELECT artwork_data, artwork_mime, artwork_key FROM campaigns WHERE id = ?")
+      .get(campaign.id)) as
+      | { artwork_data?: string | null; artwork_mime?: string | null; artwork_key?: string | null }
+      | undefined;
+
+    if (row?.artwork_data) {
+      const parsed = parseDataUrl(row.artwork_data, 16 * 1024 * 1024);
+      if (parsed && parsed.buf.length > 0) {
+        const detected = imageMime(parsed.buf) ?? "png";
+        const mime = row.artwork_mime ?? contentTypeFor(detected);
+        const key =
+          row.artwork_key && row.artwork_key !== "db-inline"
+            ? row.artwork_key
+            : campaignArtworkKey(campaign.id, extensionFor(detected));
+        await putImage(key, parsed.buf).catch(() => {});
+        if (!row.artwork_key) {
+          await db
+            .prepare("UPDATE campaigns SET artwork_key = ?, artwork_mime = ?, artwork_bytes = ? WHERE id = ?")
+            .run(key, mime, parsed.buf.length, campaign.id)
+            .catch(() => {});
+        }
+        return { buf: parsed.buf, mime };
+      }
+    }
+  } catch {
+    /* continue to SVG fallback */
+  }
+
+  // 3. Pre-migration campaign whose ephemeral `/tmp` file was lost
+  const svg = buildFallbackCampaignSvg(campaign);
+  return { buf: Buffer.from(svg, "utf8"), mime: "image/svg+xml" };
+}
+

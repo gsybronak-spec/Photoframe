@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import {
   composeCampaignFrame,
+  hasPhotoCutoutTransparency,
   loadImage,
   type CampaignPhotoConfig,
   type CampaignNameConfig,
@@ -270,6 +271,53 @@ function StepInput({
 
   return (
     <section className="glass rounded-[2rem] p-6 sm:p-7">
+      <div
+        className="relative mx-auto mb-5 w-full max-w-[260px] overflow-hidden rounded-2xl border border-shell bg-sand shadow-glass"
+        style={{ aspectRatio: `${campaign.canvas.width || 1080} / ${campaign.canvas.height || 1350}` }}
+      >
+        <div
+          className="absolute z-[2]"
+          style={{
+            left: `${campaign.art.x}%`,
+            top: `${campaign.art.y}%`,
+            width: `${campaign.art.width}%`,
+            height: `${campaign.art.height}%`,
+            transform: `rotate(${campaign.art.rotation}deg)`,
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={campaign.artworkUrl}
+            alt={campaign.name}
+            className="h-full w-full object-fill"
+            draggable={false}
+          />
+        </div>
+        {campaign.photoConfig?.enabled && (
+          <div
+            className={`pointer-events-none absolute z-[3] flex items-center justify-center overflow-hidden border-2 border-dashed border-gold/80 bg-white/35 backdrop-blur-[1px] ${
+              campaign.photoConfig.shape === "circle" ? "rounded-full" : "rounded-xl"
+            }`}
+            style={{
+              left: `${campaign.photoConfig.x}%`,
+              top: `${campaign.photoConfig.y}%`,
+              width: `${campaign.photoConfig.width}%`,
+              height: `${campaign.photoConfig.height}%`,
+              transform: `rotate(${campaign.photoConfig.rotation}deg)`,
+            }}
+          >
+            {photoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={photoUrl} alt="Preview" className="h-full w-full object-cover" />
+            ) : (
+              <span className="rounded-full bg-ink/70 px-2.5 py-1 text-[10px] font-bold text-cream">
+                Your Photo Here
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
       {campaign.nameConfig?.enabled && (
         <label className="block">
           <span className="text-xs font-bold uppercase tracking-wider text-ink-soft">
@@ -383,6 +431,7 @@ function StepAdjust({
   // re-renders stay cheap during dragging; refs are the live source of truth.
   const [zoomDisplay, setZoom] = useState(1);
   const [artworkReady, setArtworkReady] = useState(false);
+  const [isCutoutArtwork, setIsCutoutArtwork] = useState(false);
   const [artworkError, setArtworkError] = useState("");
   const [photoAspect, setPhotoAspect] = useState(1);
   const [generating, setGenerating] = useState(false);
@@ -401,7 +450,19 @@ function StepAdjust({
   useEffect(() => {
     let mounted = true;
     loadImage(campaign.artworkUrl, true)
-      .then(() => mounted && setArtworkReady(true))
+      .then((img) => {
+        if (!mounted) return;
+        setArtworkReady(true);
+        setIsCutoutArtwork(
+          hasPhotoCutoutTransparency(
+            img,
+            campaign.canvas.width || 1080,
+            campaign.canvas.height || 1350,
+            campaign.art,
+            campaign.photoConfig
+          )
+        );
+      })
       .catch((err: Error) => mounted && setArtworkError(err.message));
     loadImage(photoUrl)
       .then((img) => mounted && setPhotoAspect((img.naturalWidth || 1) / (img.naturalHeight || 1)))
@@ -409,7 +470,7 @@ function StepAdjust({
     return () => {
       mounted = false;
     };
-  }, [campaign.artworkUrl, photoUrl]);
+  }, [campaign.artworkUrl, campaign.art, campaign.canvas.height, campaign.canvas.width, campaign.photoConfig, photoUrl]);
 
   const applyTransform = useCallback(() => {
     if (panLayerRef.current) {
@@ -618,6 +679,23 @@ function StepAdjust({
                 </span>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* Foreground cutout artwork layer (for PNG frames with transparent photo windows) */}
+        {isCutoutArtwork && (
+          <div
+            className="pointer-events-none absolute z-[6]"
+            style={{
+              left: `${campaign.art.x}%`,
+              top: `${campaign.art.y}%`,
+              width: `${campaign.art.width}%`,
+              height: `${campaign.art.height}%`,
+              transform: `rotate(${campaign.art.rotation}deg)`,
+            }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={campaign.artworkUrl} alt="" className="h-full w-full object-fill" draggable={false} />
           </div>
         )}
 

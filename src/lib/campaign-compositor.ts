@@ -117,6 +117,63 @@ function pct(value: number, total: number, fallback: number): number {
 }
 
 /**
+ * Detects whether the campaign artwork has transparent pixels inside the
+ * configured Photo Area. When true (e.g. a PNG frame with a transparent cutout
+ * window), the artwork is also composited above the user photo so decorative
+ * borders/graphics sit over the photo while the photo shines through the cutout.
+ * When false (an opaque poster), the user photo sits on top of the artwork.
+ */
+export function hasPhotoCutoutTransparency(
+  artworkImg: HTMLImageElement,
+  canvasWidth: number,
+  canvasHeight: number,
+  art: CampaignArtGeometry,
+  photo: CampaignPhotoConfig | null
+): boolean {
+  if (!photo?.enabled) return false;
+  try {
+    const sw = 120;
+    const sh = Math.max(80, Math.round((sw * (canvasHeight || 1350)) / (canvasWidth || 1080)));
+    const probe = document.createElement("canvas");
+    probe.width = sw;
+    probe.height = sh;
+    const pctx = probe.getContext("2d");
+    if (!pctx) return false;
+
+    const aw = pct(art.width, sw, 100);
+    const ah = pct(art.height, sh, 100);
+    const ax = pct(art.x, sw, 0);
+    const ay = pct(art.y, sh, 0);
+    pctx.save();
+    pctx.translate(ax + aw / 2, ay + ah / 2);
+    if (art.rotation) pctx.rotate((art.rotation * Math.PI) / 180);
+    pctx.drawImage(artworkImg, -aw / 2, -ah / 2, aw, ah);
+    pctx.restore();
+
+    const pw = pct(photo.width, sw, 40);
+    const ph = pct(photo.height, sh, 30);
+    const px = pct(photo.x, sw, 30);
+    const py = pct(photo.y, sh, 35);
+
+    // Sample a 5x5 grid across the central 60% of the photo box.
+    let transparentSamples = 0;
+    let totalSamples = 0;
+    for (let gx = 0.2; gx <= 0.81; gx += 0.15) {
+      for (let gy = 0.2; gy <= 0.81; gy += 0.15) {
+        const sx = Math.min(sw - 1, Math.max(0, Math.round(px + pw * gx)));
+        const sy = Math.min(sh - 1, Math.max(0, Math.round(py + ph * gy)));
+        const alpha = pctx.getImageData(sx, sy, 1, 1).data[3];
+        totalSamples += 1;
+        if (alpha < 245) transparentSamples += 1;
+      }
+    }
+    return totalSamples > 0 && transparentSamples >= 2;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Composites the final frame at the campaign's full output resolution.
  * Returns a PNG data URL.
  */
@@ -135,19 +192,26 @@ export async function composeCampaignFrame(input: ComposeInput): Promise<string>
   ctx.fillStyle = "#fff8f0"; // ZenFrame cream
   ctx.fillRect(0, 0, W, H);
 
-  /* Layer 1 — campaign artwork ------------------------------------- */
   const aw = pct(input.art.width, W, 100);
   const ah = pct(input.art.height, H, 100);
   const ax = pct(input.art.x, W, 0);
   const ay = pct(input.art.y, H, 0);
-  ctx.save();
-  ctx.translate(ax + aw / 2, ay + ah / 2);
-  if (input.art.rotation) ctx.rotate((input.art.rotation * Math.PI) / 180);
-  ctx.drawImage(artworkImg, -aw / 2, -ah / 2, aw, ah);
-  ctx.restore();
+
+  const drawArtworkLayer = () => {
+    ctx.save();
+    ctx.translate(ax + aw / 2, ay + ah / 2);
+    if (input.art.rotation) ctx.rotate((input.art.rotation * Math.PI) / 180);
+    ctx.drawImage(artworkImg, -aw / 2, -ah / 2, aw, ah);
+    ctx.restore();
+  };
+
+  /* Layer 1 — campaign artwork base -------------------------------- */
+  drawArtworkLayer();
 
   /* Layer 2 — user photo inside the admin mask ---------------------- */
   const photo = input.photoConfig;
+  const isCutoutFrame = hasPhotoCutoutTransparency(artworkImg, W, H, input.art, photo);
+
   if (photo?.enabled && input.userPhotoUrl) {
     const userImg = await loadImage(input.userPhotoUrl);
 
@@ -192,6 +256,12 @@ export async function composeCampaignFrame(input: ComposeInput): Promise<string>
 
     ctx.drawImage(userImg, -drawW / 2 + panPxX, -drawH / 2 + panPxY, drawW, drawH);
     ctx.restore();
+
+    // If the campaign artwork has a transparent photo cutout, composite the
+    // artwork over the photo so decorative borders/garlands remain on top.
+    if (isCutoutFrame) {
+      drawArtworkLayer();
+    }
   }
 
   /* Layer 3 — name overlay ------------------------------------------ */

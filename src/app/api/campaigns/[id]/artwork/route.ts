@@ -1,6 +1,5 @@
 import { fail, serverError } from "@/server/api";
-import { getCampaignById } from "@/server/campaigns";
-import { getStorage } from "@/server/storage";
+import { getCampaignById, resolveCampaignArtwork } from "@/server/campaigns";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -17,15 +16,15 @@ export async function GET(_req: Request, { params }: Params) {
       return fail("Artwork not found", "NOT_FOUND");
     }
 
-    const buf = await getStorage().get(campaign.artwork_key);
-    if (!buf) return fail("Artwork not found", "NOT_FOUND");
+    const resolved = await resolveCampaignArtwork(campaign);
+    if (!resolved) return fail("Artwork not found", "NOT_FOUND");
 
-    const body = new Uint8Array(buf);
+    const body = new Uint8Array(resolved.buf);
     return new Response(body, {
       status: 200,
       headers: {
-        "Content-Type": campaign.artwork_mime ?? "image/png",
-        "Content-Length": String(buf.length),
+        "Content-Type": resolved.mime,
+        "Content-Length": String(resolved.buf.length),
         // Short cache: re-uploaded artwork must propagate quickly.
         "Cache-Control": "public, max-age=60, s-maxage=300, stale-while-revalidate=60",
       },

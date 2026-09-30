@@ -179,6 +179,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   artwork_key   TEXT,
   artwork_mime  TEXT,
   artwork_bytes INTEGER NOT NULL DEFAULT 0,
+  artwork_data  TEXT,
   canvas_width  INTEGER NOT NULL DEFAULT 1080,
   canvas_height INTEGER NOT NULL DEFAULT 1350,
   art_x         REAL NOT NULL DEFAULT 0,

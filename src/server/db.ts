@@ -402,6 +402,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   artwork_key   TEXT,
   artwork_mime  TEXT,
   artwork_bytes INTEGER NOT NULL DEFAULT 0,
+  artwork_data  TEXT,
   canvas_width  INTEGER NOT NULL DEFAULT 1080,
   canvas_height INTEGER NOT NULL DEFAULT 1350,
   art_x         REAL NOT NULL DEFAULT 0,
@@ -756,6 +757,13 @@ const MIGRATIONS: Migration[] = [
       addColumn(db, "campaign_name_configs", "text_opacity", "REAL NOT NULL DEFAULT 1");
     },
   },
+  {
+    version: 11,
+    name: "campaign_artwork_data_fallback",
+    up(db) {
+      addColumn(db, "campaigns", "artwork_data", "TEXT");
+    },
+  },
 ];
 
 /** Tables that must exist once migrations have run. */
@@ -980,6 +988,14 @@ async function ensurePgSchema(pool: import("pg").Pool): Promise<void> {
       if (!camp.rows[0]?.present) {
         await client.query(POSTGRES_CAMPAIGNS_SCHEMA);
       }
+      // Always apply additive column migrations idempotently on existing DBs.
+      await client.query(`
+        ALTER TABLE frame_overrides ADD COLUMN IF NOT EXISTS settings_json TEXT;
+        ALTER TABLE campaign_name_configs ADD COLUMN IF NOT EXISTS line_height REAL NOT NULL DEFAULT 1.2;
+        ALTER TABLE campaign_name_configs ADD COLUMN IF NOT EXISTS text_scale REAL NOT NULL DEFAULT 1;
+        ALTER TABLE campaign_name_configs ADD COLUMN IF NOT EXISTS text_opacity REAL NOT NULL DEFAULT 1;
+        ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS artwork_data TEXT;
+      `);
       return;
     }
     await client.query(POSTGRES_BASELINE_SCHEMA);

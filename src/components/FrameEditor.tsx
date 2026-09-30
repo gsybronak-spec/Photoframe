@@ -505,8 +505,9 @@ export function FrameEditor({
       ctx.restore();
     }
 
-    // SVG overlay (art, title, brand, caption, decimal typography) drawn on top at full resolution.
-    const overlaySVG = buildFrameSVG(activeFrame, undefined, caption, frameSettings);
+    // SVG overlay (art, title, brand, caption, decimal typography) drawn on top at full resolution
+    // with a transparent 700×700 cutout at (150,250) so the user's photo is never covered.
+    const overlaySVG = buildFrameSVG(activeFrame, "__cutout__", caption, frameSettings);
     const url = URL.createObjectURL(
       new Blob([overlaySVG], { type: "image/svg+xml;charset=utf-8" })
     );
@@ -715,7 +716,7 @@ export function FrameEditor({
   const overlayHref = useMemo(
     () =>
       `data:image/svg+xml;utf8,${encodeURIComponent(
-        buildFrameSVG(activeFrame, undefined, caption, frameSettings)
+        buildFrameSVG(activeFrame, "__cutout__", caption, frameSettings)
       )}`,
     [activeFrame, caption, frameSettings]
   );
@@ -773,22 +774,24 @@ export function FrameEditor({
           }}
         >
           {photo ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={photo}
-              alt="Your upload"
-              draggable={false}
-              className="absolute left-[15%] top-[20%] h-[70%] w-[70%] object-cover"
-              style={{
-                transform: `translate(${t.x}px, ${t.y}px) scale(${
-                  t.scale * (frameSettings.photo_scale || 1)
-                })`,
-              }}
-            />
+            <div className="absolute left-[15%] top-[20%] h-[56%] w-[70%] overflow-hidden rounded-2xl">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={photo}
+                alt="Your upload"
+                draggable={false}
+                className="h-full w-full object-cover"
+                style={{
+                  transform: `translate(${t.x}px, ${t.y}px) scale(${
+                    t.scale * (frameSettings.photo_scale || 1)
+                  })`,
+                }}
+              />
+            </div>
           ) : (
             <label
               htmlFor="photo-input"
-              className="absolute left-[15%] top-[20%] flex h-[70%] w-[70%] cursor-pointer flex-col items-center justify-center gap-3 rounded-3xl border-2 border-dashed border-white/80 bg-white/30 text-center backdrop-blur-sm transition hover:bg-white/50"
+              className="absolute left-[15%] top-[20%] z-10 flex h-[56%] w-[70%] cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-white/85 bg-white/40 text-center backdrop-blur-sm transition hover:bg-white/60"
             >
               {stage === "reading" ? (
                 <>

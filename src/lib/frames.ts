@@ -837,7 +837,7 @@ export function validateFrameRegistry(
 /* Backdrop layer                                                      */
 /* ------------------------------------------------------------------ */
 
-function backdrop(frame: Frame): string {
+function backdrop(frame: Frame, cutoutWindow = false): string {
   const style = { ...DEFAULT_FRAME_STYLE, ...(frame?.style ?? {}) };
   const { accent, motif } = style;
   let deco = "";
@@ -848,53 +848,62 @@ function backdrop(frame: Frame): string {
         const a = (i * 30 * Math.PI) / 180;
         const x = 500 + Math.sin(a) * 900;
         const y = 190 - Math.cos(a) * 900;
-        return `<line x1="500" y1="190" x2="${x.toFixed(0)}" y2="${y.toFixed(0)}" stroke="${accent}" stroke-opacity="0.13" stroke-width="46" stroke-linecap="round"/>`;
+        return `<line x1="500" y1="190" x2="${x.toFixed(0)}" y2="${y.toFixed(0)}" stroke="${accent}" stroke-opacity="0.18" stroke-width="46" stroke-linecap="round"/>`;
       }).join("");
       break;
     case "mandala":
       deco = Array.from({ length: 24 }, (_, i) => {
         const a = (i * 15 * Math.PI) / 180;
-        return `<circle cx="${(500 + Math.cos(a) * 430).toFixed(0)}" cy="${(625 + Math.sin(a) * 430).toFixed(0)}" r="${i % 2 ? 7 : 12}" fill="${accent}" fill-opacity="0.16"/>`;
+        return `<circle cx="${(500 + Math.cos(a) * 430).toFixed(0)}" cy="${(625 + Math.sin(a) * 430).toFixed(0)}" r="${i % 2 ? 8 : 14}" fill="${accent}" fill-opacity="0.22"/>`;
       }).join("");
       break;
     case "petals":
       deco = Array.from({ length: 10 }, (_, i) => {
         const a = (i * 36 * Math.PI) / 180;
-        return `<ellipse cx="${(500 + Math.cos(a) * 420).toFixed(0)}" cy="${(625 + Math.sin(a) * 420).toFixed(0)}" rx="14" ry="34" fill="${accent}" fill-opacity="0.15" transform="rotate(${i * 36} ${(500 + Math.cos(a) * 420).toFixed(0)} ${(625 + Math.sin(a) * 420).toFixed(0)})"/>`;
+        return `<ellipse cx="${(500 + Math.cos(a) * 420).toFixed(0)}" cy="${(625 + Math.sin(a) * 420).toFixed(0)}" rx="16" ry="36" fill="${accent}" fill-opacity="0.2" transform="rotate(${i * 36} ${(500 + Math.cos(a) * 420).toFixed(0)} ${(625 + Math.sin(a) * 420).toFixed(0)})"/>`;
       }).join("");
       break;
     case "rings":
     default:
-      deco = [130, 210, 290, 370]
+      deco = [130, 210, 290, 370, 440]
         .map(
           (r) =>
-            `<circle cx="500" cy="625" r="${r}" fill="none" stroke="${accent}" stroke-opacity="0.12" stroke-width="3" stroke-dasharray="2 14"/>`
+            `<circle cx="500" cy="625" r="${r}" fill="none" stroke="${accent}" stroke-opacity="0.18" stroke-width="4" stroke-dasharray="4 14"/>`
         )
         .join("");
       break;
     case "bubbles":
       deco = [
-        [110, 190, 16], [180, 950, 24], [820, 260, 20], [880, 900, 14],
-        [70, 620, 11], [930, 560, 18], [300, 130, 10], [700, 1120, 16],
-        [220, 1120, 12], [780, 120, 13],
+        [110, 190, 18], [180, 990, 26], [820, 220, 22], [880, 980, 16],
+        [70, 620, 14], [930, 560, 20], [300, 130, 12], [700, 1120, 18],
+        [220, 1120, 14], [780, 120, 15],
       ]
         .map(
           ([x, y, r]) =>
-            `<circle cx="${x}" cy="${y}" r="${r}" fill="${accent}" fill-opacity="0.14"/>`
+            `<circle cx="${x}" cy="${y}" r="${r}" fill="${accent}" fill-opacity="0.2"/>`
         )
         .join("");
       break;
     case "mountains":
       deco =
-        `<path d="M-20 1150 L180 870 L320 1050 L520 780 L730 1030 L870 900 L1020 1150 Z" fill="${accent}" fill-opacity="0.10"/>` +
-        `<path d="M-20 1210 L240 990 L430 1140 L640 950 L860 1160 L1020 1030 L1020 1210 Z" fill="${accent}" fill-opacity="0.16"/>`;
+        `<path d="M-20 1150 L180 870 L320 1050 L520 780 L730 1030 L870 900 L1020 1150 Z" fill="${accent}" fill-opacity="0.16"/>` +
+        `<path d="M-20 1210 L240 990 L430 1140 L640 950 L860 1160 L1020 1030 L1020 1210 Z" fill="${accent}" fill-opacity="0.24"/>`;
       break;
   }
 
+  const baseFill = cutoutWindow
+    ? `<path d="M0,0 H1000 V1250 H0 Z M150,250 H850 V950 H150 Z" fill="url(#bgGrad)" fill-rule="evenodd"/>`
+    : `<rect width="1000" height="1250" fill="url(#bgGrad)"/>`;
+
+  const clipStart = cutoutWindow ? `<g clip-path="url(#frameOuterClip)">` : `<g>`;
+  const clipEnd = `</g>`;
+
   return `
-    <rect width="1000" height="1250" fill="url(#bgGrad)"/>
-    ${deco}
-    <circle cx="500" cy="190" r="150" fill="${accent}" fill-opacity="0.10"/>
+    ${baseFill}
+    ${clipStart}
+      ${deco}
+      <circle cx="500" cy="190" r="150" fill="${accent}" fill-opacity="0.14"/>
+    ${clipEnd}
   `;
 }
 
@@ -908,65 +917,65 @@ function centerArt(frame: Frame, cy: number): string {
   switch (frame?.art) {
     case "sun":
       return `
-        <g stroke="${accent}" stroke-width="7" stroke-linecap="round" opacity="0.9">
+        <g stroke="${accent}" stroke-width="7" stroke-linecap="round" opacity="0.95">
           ${Array.from({ length: 12 }, (_, i) => {
             const a = (i * 30 * Math.PI) / 180;
-            return `<line x1="${(500 + Math.cos(a) * 64).toFixed(1)}" y1="${(cy + Math.sin(a) * 64).toFixed(1)}" x2="${(500 + Math.cos(a) * 84).toFixed(1)}" y2="${(cy + Math.sin(a) * 84).toFixed(1)}"/>`;
+            return `<line x1="${(500 + Math.cos(a) * 64).toFixed(1)}" y1="${(cy + Math.sin(a) * 64).toFixed(1)}" x2="${(500 + Math.cos(a) * 86).toFixed(1)}" y2="${(cy + Math.sin(a) * 86).toFixed(1)}"/>`;
           }).join("")}
         </g>
         <circle cx="500" cy="${cy}" r="48" fill="${accent}"/>
-        <circle cx="500" cy="${cy}" r="48" fill="none" stroke="${ink}" stroke-opacity="0.25" stroke-width="4"/>`;
+        <circle cx="500" cy="${cy}" r="48" fill="none" stroke="${ink}" stroke-opacity="0.3" stroke-width="4"/>`;
     case "lotus":
     default:
       return `
         <g fill="${accent}">
           <ellipse cx="500" cy="${cy + 18}" rx="88" ry="34" fill-opacity="0.95"/>
-          <ellipse cx="452" cy="${cy + 2}" rx="46" ry="66" fill-opacity="0.8" transform="rotate(-28 452 ${cy + 2})"/>
-          <ellipse cx="548" cy="${cy + 2}" rx="46" ry="66" fill-opacity="0.8" transform="rotate(28 548 ${cy + 2})"/>
-          <ellipse cx="432" cy="${cy - 18}" rx="30" ry="52" fill-opacity="0.65" transform="rotate(-55 432 ${cy - 18})"/>
-          <ellipse cx="568" cy="${cy - 18}" rx="30" ry="52" fill-opacity="0.65" transform="rotate(55 568 ${cy - 18})"/>
-          <ellipse cx="500" cy="${cy - 26}" rx="22" ry="46" fill-opacity="0.5"/>
+          <ellipse cx="452" cy="${cy + 2}" rx="46" ry="66" fill-opacity="0.85" transform="rotate(-28 452 ${cy + 2})"/>
+          <ellipse cx="548" cy="${cy + 2}" rx="46" ry="66" fill-opacity="0.85" transform="rotate(28 548 ${cy + 2})"/>
+          <ellipse cx="432" cy="${cy - 18}" rx="30" ry="52" fill-opacity="0.7" transform="rotate(-55 432 ${cy - 18})"/>
+          <ellipse cx="568" cy="${cy - 18}" rx="30" ry="52" fill-opacity="0.7" transform="rotate(55 568 ${cy - 18})"/>
+          <ellipse cx="500" cy="${cy - 26}" rx="22" ry="46" fill-opacity="0.6"/>
         </g>
-        <path d="M400 ${cy + 52} Q500 ${cy + 92} 600 ${cy + 52}" stroke="${ink}" stroke-opacity="0.35" stroke-width="6" fill="none" stroke-linecap="round"/>`;
+        <path d="M400 ${cy + 52} Q500 ${cy + 92} 600 ${cy + 52}" stroke="${ink}" stroke-opacity="0.4" stroke-width="6" fill="none" stroke-linecap="round"/>`;
     case "om":
       return `
         <text x="500" y="${cy + 34}" font-size="96" text-anchor="middle" fill="${accent}" font-family="Georgia, serif">ॐ</text>
-        <circle cx="500" cy="${cy}" r="70" fill="none" stroke="${accent}" stroke-opacity="0.4" stroke-width="5"/>`;
+        <circle cx="500" cy="${cy}" r="70" fill="none" stroke="${accent}" stroke-opacity="0.5" stroke-width="5"/>`;
     case "chakra":
       return `
         ${["#EF4444", "#F97316", "#F59E0B", "#10B981", "#3B82F6", "#6366F1", "#8B5CF6"]
           .map(
             (c, i) =>
-              `<circle cx="500" cy="${cy - 54 + i * 18}" r="${11 - i * 0.4}" fill="${c}" fill-opacity="0.85"/>`
+              `<circle cx="500" cy="${cy - 54 + i * 18}" r="${11 - i * 0.4}" fill="${c}" fill-opacity="0.9"/>`
           )
           .join("")}
-        <circle cx="500" cy="${cy}" r="58" fill="none" stroke="${accent}" stroke-opacity="0.45" stroke-width="5"/>`;
+        <circle cx="500" cy="${cy}" r="58" fill="none" stroke="${accent}" stroke-opacity="0.55" stroke-width="5"/>`;
     case "candle":
       return `
-        <ellipse cx="500" cy="${cy + 58}" rx="54" ry="14" fill="${accent}" fill-opacity="0.35"/>
-        <rect x="474" y="${cy + 6}" width="52" height="52" rx="8" fill="#FFF6E6" stroke="${ink}" stroke-opacity="0.3" stroke-width="4"/>
+        <ellipse cx="500" cy="${cy + 58}" rx="54" ry="14" fill="${accent}" fill-opacity="0.4"/>
+        <rect x="474" y="${cy + 6}" width="52" height="52" rx="8" fill="#FFF6E6" stroke="${ink}" stroke-opacity="0.35" stroke-width="4"/>
         <path d="M500 ${cy - 34} C514 ${cy - 12} 512 ${cy - 2} 500 ${cy + 6} C488 ${cy - 2} 486 ${cy - 12} 500 ${cy - 34} Z" fill="${accent}"/>
-        <circle cx="500" cy="${cy - 12}" r="34" fill="${accent}" fill-opacity="0.25"/>`;
+        <circle cx="500" cy="${cy - 12}" r="34" fill="${accent}" fill-opacity="0.3"/>`;
     case "incense":
       return `
-        <rect x="468" y="${cy + 4}" width="64" height="18" rx="9" fill="${ink}" fill-opacity="0.55"/>
+        <rect x="468" y="${cy + 4}" width="64" height="18" rx="9" fill="${ink}" fill-opacity="0.6"/>
         <path d="M500 ${cy + 2} C500 ${cy - 40} 470 ${cy - 60} 500 ${cy - 100} C526 ${cy - 132} 498 ${cy - 150} 502 ${cy - 176}"
-          stroke="${accent}" stroke-width="7" fill="none" stroke-linecap="round" stroke-opacity="0.85"/>
+          stroke="${accent}" stroke-width="7" fill="none" stroke-linecap="round" stroke-opacity="0.9"/>
         <circle cx="502" cy="${cy - 176}" r="7" fill="${accent}"/>
-        <circle cx="486" cy="${cy - 92}" r="5" fill="${accent}" fill-opacity="0.5"/>`;
+        <circle cx="486" cy="${cy - 92}" r="5" fill="${accent}" fill-opacity="0.6"/>`;
     case "waves":
       return `
         <g fill="none" stroke="${accent}" stroke-width="8" stroke-linecap="round">
           <path d="M430 ${cy - 16} Q465 ${cy - 44} 500 ${cy - 16} T570 ${cy - 16}"/>
-          <path d="M430 ${cy + 14} Q465 ${cy - 14} 500 ${cy + 14} T570 ${cy + 14}" stroke-opacity="0.65"/>
-          <path d="M430 ${cy + 44} Q465 ${cy + 16} 500 ${cy + 44} T570 ${cy + 44}" stroke-opacity="0.35"/>
+          <path d="M430 ${cy + 14} Q465 ${cy - 14} 500 ${cy + 14} T570 ${cy + 14}" stroke-opacity="0.7"/>
+          <path d="M430 ${cy + 44} Q465 ${cy + 16} 500 ${cy + 44} T570 ${cy + 44}" stroke-opacity="0.45"/>
         </g>`;
     case "moon":
       return `
         <path d="M540 ${cy - 52} A62 62 0 1 0 540 ${cy + 52} A48 48 0 1 1 540 ${cy - 52} Z" fill="${accent}"/>
-        <circle cx="428" cy="${cy - 44}" r="6" fill="${accent}" fill-opacity="0.6"/>
-        <circle cx="404" cy="${cy}" r="4" fill="${accent}" fill-opacity="0.45"/>
-        <circle cx="440" cy="${cy + 40}" r="5" fill="${accent}" fill-opacity="0.5"/>`;
+        <circle cx="428" cy="${cy - 44}" r="6" fill="${accent}" fill-opacity="0.7"/>
+        <circle cx="404" cy="${cy}" r="4" fill="${accent}" fill-opacity="0.55"/>
+        <circle cx="440" cy="${cy + 40}" r="5" fill="${accent}" fill-opacity="0.6"/>`;
   }
 }
 
@@ -994,12 +1003,16 @@ function overlay(
   const fontFamily = esc(cfg.font_family || "Fraunces");
 
   return `
-    <g opacity="${borderOpacity}">${centerArt(frame, 1105)}</g>
-    <text x="500" y="1216" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
-      font-size="46" letter-spacing="6" fill="${ink}">${esc(title.toUpperCase())}</text>
-    <rect x="420" y="1238" width="160" height="5" rx="2.5" fill="${accent}" fill-opacity="${borderOpacity}"/>
-    <text x="500" y="90" text-anchor="middle" font-family="Arial, sans-serif" font-weight="bold"
-      font-size="30" letter-spacing="10" fill="${ink}" fill-opacity="0.55">${BRAND}</text>
+    <rect x="36" y="36" width="928" height="1178" rx="36" fill="none" stroke="${accent}" stroke-opacity="${roundNum(borderOpacity * 0.45, 3)}" stroke-width="4"/>
+    <rect x="150" y="250" width="700" height="700" rx="24" fill="none" stroke="${accent}" stroke-opacity="${roundNum(borderOpacity * 0.85, 3)}" stroke-width="6"/>
+    <g opacity="${borderOpacity}">${centerArt(frame, 1085)}</g>
+    <text x="500" y="1212" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
+      font-size="44" letter-spacing="6" fill="${ink}">${esc(title.toUpperCase())}</text>
+    <rect x="420" y="1234" width="160" height="5" rx="2.5" fill="${accent}" fill-opacity="${borderOpacity}"/>
+    <text x="500" y="96" text-anchor="middle" font-family="Arial, sans-serif" font-weight="bold"
+      font-size="28" letter-spacing="10" fill="${ink}" fill-opacity="0.65">${BRAND}</text>
+    <text x="500" y="142" text-anchor="middle" font-family="Georgia, serif" font-style="italic"
+      font-size="22" fill="${ink}" fill-opacity="0.6">${esc(frame?.tagline ?? "")}</text>
     ${
       caption
         ? `<text x="${captionX}" y="${captionY}" text-anchor="middle" font-family="${fontFamily}, Georgia, serif" font-style="italic"
@@ -1033,20 +1046,27 @@ export function buildFrameSVG(
   customSettings?: Partial<FrameNumericSettings>
 ): string {
   const style = { ...DEFAULT_FRAME_STYLE, ...(frame?.style ?? {}) };
-  const photo = photoHref
-    ? `<image href="${esc(photoHref)}" x="150" y="250" width="700" height="700" preserveAspectRatio="xMidYMid slice"/>`
-    : `<rect x="150" y="250" width="700" height="700" rx="24" fill="#ffffff" fill-opacity="0.5"/>
-       <text x="500" y="610" text-anchor="middle" font-family="Arial, sans-serif" font-size="30" fill="${style.ink}" fill-opacity="0.5">Your photo goes here</text>
-       <text x="500" y="650" text-anchor="middle" font-family="Arial, sans-serif" font-size="46">🌿</text>`;
+  const isCutout = photoHref === "__cutout__";
+
+  const photo = isCutout
+    ? ""
+    : photoHref
+      ? `<image href="${esc(photoHref)}" x="150" y="250" width="700" height="700" preserveAspectRatio="xMidYMid slice"/>`
+      : `<rect x="150" y="250" width="700" height="700" rx="24" fill="#ffffff" fill-opacity="0.55"/>
+         <g opacity="0.85">${centerArt(frame, 560)}</g>
+         <text x="500" y="700" text-anchor="middle" font-family="Georgia, serif" font-size="28" fill="${style.ink}" fill-opacity="0.65">${esc(frame.occasion || frame.category || "ZenFrame")}</text>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1000" height="1250" viewBox="0 0 1000 1250">
   <defs>
-    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y1="1">
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="${style.from}"/>
       <stop offset="1" stop-color="${style.to}"/>
     </linearGradient>
+    <clipPath id="frameOuterClip">
+      <path d="M0,0 H1000 V1250 H0 Z M150,250 H850 V950 H150 Z" clip-rule="evenodd"/>
+    </clipPath>
   </defs>
-  <g>${backdrop(frame)}</g>
+  <g>${backdrop(frame, isCutout)}</g>
   <g>${photo}</g>
   <g>${overlay(frame, caption, customSettings)}</g>
 </svg>`;
@@ -1063,9 +1083,11 @@ export function buildThumbSVG(frame: Frame): string {
       <stop offset="1" stop-color="${style.to}"/>
     </linearGradient>
   </defs>
-  <g>${backdrop(frame)}</g>
-  <g transform="translate(0 -160)">${centerArt(frame, 625)}</g>
-  <text x="500" y="1010" text-anchor="middle" font-family="Georgia, serif" font-size="44" letter-spacing="4" fill="${style.ink}">${esc(shortTitle(title))}</text>
+  <g>${backdrop(frame, false)}</g>
+  <rect x="90" y="90" width="820" height="1070" rx="36" fill="none" stroke="${style.accent}" stroke-opacity="0.45" stroke-width="6"/>
+  <g transform="translate(0 -140)">${centerArt(frame, 625)}</g>
+  <text x="500" y="995" text-anchor="middle" font-family="Georgia, serif" font-size="44" letter-spacing="4" fill="${style.ink}">${esc(shortTitle(title))}</text>
+  <text x="500" y="1060" text-anchor="middle" font-family="Georgia, serif" font-style="italic" font-size="26" fill="${style.ink}" fill-opacity="0.65">${esc(frame?.occasion ?? "")}</text>
 </svg>`;
 }
 

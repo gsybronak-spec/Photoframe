@@ -512,6 +512,7 @@ export function AdminCampaignsPanel() {
 
   // Editor state
   const [editing, setEditing] = useState<CampaignDto | null>(null);
+  const [localArtworkUrl, setLocalArtworkUrl] = useState<string | null>(null);
   const [photo, setPhoto] = useState<CampaignPhotoConfig>(DEFAULT_PHOTO);
   const [name, setName] = useState<CampaignNameConfig>(DEFAULT_NAME);
   const [activeLayer, setActiveLayer] = useState<LayerId>("art");
@@ -577,6 +578,7 @@ export function AdminCampaignsPanel() {
       photoConfig: CampaignPhotoConfig | null;
       nameConfig: CampaignNameConfig | null;
     };
+    setLocalArtworkUrl(null);
     setEditing({ ...c, hasArtwork: Boolean(c.artwork_key ?? c.hasArtwork) });
     setPhoto(c.photoConfig ?? { ...DEFAULT_PHOTO });
     setName(c.nameConfig ?? { ...DEFAULT_NAME });
@@ -586,6 +588,7 @@ export function AdminCampaignsPanel() {
   }, [showToast]);
 
   const newCampaign = () => {
+    setLocalArtworkUrl(null);
     setEditing({
       id: "",
       name: "",
@@ -660,6 +663,8 @@ export function AdminCampaignsPanel() {
       if (!res.ok || !data.ok) throw new Error(data.error || "Upload failed");
 
       const created = data.campaign as { id: string; name: string; slug: string; status: CampaignDto["status"] };
+      const nowStamp = new Date().toISOString();
+      setLocalArtworkUrl(dataUrl);
       setEditing((prev) =>
         prev
           ? {
@@ -668,6 +673,7 @@ export function AdminCampaignsPanel() {
               slug: prev.slug || created.slug,
               hasArtwork: true,
               art: { ...fit, rotation: 0 },
+              updatedAt: nowStamp,
             }
           : prev
       );
@@ -717,7 +723,11 @@ export function AdminCampaignsPanel() {
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || "Save failed");
       const saved = data.campaign as { id: string; slug: string };
-      setEditing((prev) => (prev ? { ...prev, id: prev.id || saved.id, slug: saved.slug } : prev));
+      setEditing((prev) =>
+        prev
+          ? { ...prev, id: prev.id || saved.id, slug: saved.slug, updatedAt: new Date().toISOString() }
+          : prev
+      );
       setSaveMsg({ ok: true, text: `Saved. Public page: /campaign/${saved.slug}` });
       showToast("Campaign saved");
       void load();
@@ -743,7 +753,10 @@ export function AdminCampaignsPanel() {
 
   const preset = editing ? findMatchingPreset(editing.canvas.width, editing.canvas.height) : null;
   const artworkUrl =
-    editing && editing.hasArtwork && editing.id ? `/api/admin/campaigns/${editing.id}/artwork?v=${editing.updatedAt || ""}` : null;
+    localArtworkUrl ??
+    (editing && editing.hasArtwork && editing.id
+      ? `/api/admin/campaigns/${editing.id}/artwork?v=${encodeURIComponent(editing.updatedAt || "")}`
+      : null);
 
   const metricCards: { label: string; value: number; accent: string }[] = [
     { label: "Active campaigns", value: metrics?.byStatus.active ?? 0, accent: "text-jade-deep" },
@@ -1189,6 +1202,16 @@ export function AdminCampaignsPanel() {
           <ul className="mt-4 space-y-3">
             {campaigns.map((c) => (
               <li key={c.id} className="flex flex-wrap items-center gap-3 rounded-2xl border border-shell bg-white p-4">
+                {c.hasArtwork && (
+                  <div className="h-14 w-11 shrink-0 overflow-hidden rounded-xl border border-shell bg-sand">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={`/api/admin/campaigns/${c.id}/artwork?v=${encodeURIComponent(c.updatedAt || "")}`}
+                      alt={c.name}
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                )}
                 <div className="min-w-0 flex-1">
                   <p className="flex flex-wrap items-center gap-2">
                     <span className="font-display text-sm font-bold text-ink">{c.name}</span>

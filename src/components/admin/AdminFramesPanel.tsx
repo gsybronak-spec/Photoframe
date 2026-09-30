@@ -15,10 +15,13 @@ import {
   Sparkles,
 } from "lucide-react";
 import {
+  buildFrameSVG,
   DEFAULT_FRAME_SETTINGS,
   getAllFrames,
+  getFrame,
   normalizeFrameSettings,
   resolveFrameSlug,
+  svgToDataURI,
   toCatalogFrame,
   type FrameNumericSettings,
 } from "@/lib/frames";
@@ -467,6 +470,11 @@ export function AdminFramesPanel() {
           draft.active !== f.active ||
           !settingsEqual(draft.settings, f.settings);
 
+        const codeFrame = getFrame(f.slug);
+        const previewUri = codeFrame
+          ? svgToDataURI(buildFrameSVG(codeFrame, undefined, f.tagline || "Mindful Presence", draft.settings))
+          : null;
+
         return (
           <section
             key={f.slug}
@@ -474,28 +482,44 @@ export function AdminFramesPanel() {
             className="glass rounded-3xl p-5 sm:p-6"
             aria-labelledby={`frame-${f.slug}`}
           >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 id={`frame-${f.slug}`} className="font-display text-xl font-semibold text-ink">
-                    {f.title}
-                  </h3>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="flex items-start gap-4">
+                {previewUri && (
                   <Link
                     href={`/frames/${f.slug}`}
-                    className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-0.5 text-[11px] font-semibold text-teal-deep hover:text-coral"
+                    className="group relative block h-28 w-22 shrink-0 overflow-hidden rounded-2xl border border-amber-900/15 bg-cream shadow-sm transition hover:scale-[1.02]"
+                    title={`Open ${f.title} in editor`}
                   >
-                    Open in Editor <ExternalLink className="h-3 w-3" aria-hidden />
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={previewUri}
+                      alt={`${f.title} frame artwork`}
+                      className="h-full w-full object-cover"
+                    />
                   </Link>
+                )}
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 id={`frame-${f.slug}`} className="font-display text-xl font-semibold text-ink">
+                      {f.title}
+                    </h3>
+                    <Link
+                      href={`/frames/${f.slug}`}
+                      className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-0.5 text-[11px] font-semibold text-teal-deep hover:text-coral"
+                    >
+                      Open in Editor <ExternalLink className="h-3 w-3" aria-hidden />
+                    </Link>
+                  </div>
+                  <p className="mt-0.5 text-xs text-ink-soft">
+                    Slug: <code className="font-mono font-semibold text-ink">/{f.slug}</code> · ID:{" "}
+                    <code className="font-mono text-ink-soft">{f.id}</code> · {f.occasion} · art: {f.art}
+                    {f.overridden && (
+                      <span className="ml-2 rounded-full bg-saffron/15 px-2 py-0.5 font-semibold text-saffron-deep">
+                        customised
+                      </span>
+                    )}
+                  </p>
                 </div>
-                <p className="mt-0.5 text-xs text-ink-soft">
-                  Slug: <code className="font-mono font-semibold text-ink">/{f.slug}</code> · ID:{" "}
-                  <code className="font-mono text-ink-soft">{f.id}</code> · {f.occasion} · art: {f.art}
-                  {f.overridden && (
-                    <span className="ml-2 rounded-full bg-saffron/15 px-2 py-0.5 font-semibold text-saffron-deep">
-                      customised
-                    </span>
-                  )}
-                </p>
               </div>
               <div className="flex items-center gap-4">
                 <label className="flex items-center gap-2 text-xs font-semibold text-ink">
