@@ -29,6 +29,16 @@ import {
   findMatchingPreset,
   coverFitGeometry,
 } from "@/lib/campaign-sizes";
+import {
+  FONT_SIZE_OPTIONS,
+  LETTER_SPACING_OPTIONS,
+  LINE_HEIGHT_OPTIONS,
+  NumberSelect,
+  OPACITY_OPTIONS,
+  PERCENT_OPTIONS,
+  ROTATION_OPTIONS,
+  SCALE_OPTIONS,
+} from "@/components/ui/NumberSelect";
 
 /* ------------------------------------------------------------------ */
 /* Types (mirror of the API payloads)                                  */
@@ -57,6 +67,9 @@ export interface CampaignNameConfig {
   font_weight: "normal" | "bold";
   alignment: "left" | "center" | "right";
   letter_spacing: number;
+  line_height?: number;
+  text_scale?: number;
+  text_opacity?: number;
 }
 
 export interface CampaignDto {
@@ -108,6 +121,9 @@ const DEFAULT_NAME: CampaignNameConfig = {
   font_weight: "bold",
   alignment: "center",
   letter_spacing: 1,
+  line_height: 1.2,
+  text_scale: 1,
+  text_opacity: 1,
 };
 
 const STATUS_STYLES: Record<CampaignDto["status"], string> = {
@@ -373,7 +389,9 @@ function CanvasStage({
               className="w-full truncate"
               style={{
                 fontFamily: `"${name.font_family}", sans-serif`,
-                fontSize: `${Math.max(10, Math.round(name.font_size * (W / 450)))}px`,
+                fontSize: `${Math.max(8, Math.round(name.font_size * (name.text_scale ?? 1) * (W / 450) * 100) / 100)}px`,
+                lineHeight: name.line_height ?? 1.2,
+                opacity: name.text_opacity ?? 1,
                 fontWeight: name.font_weight === "bold" ? 700 : 400,
                 color: name.font_color,
                 letterSpacing: `${name.letter_spacing}px`,
@@ -423,7 +441,7 @@ function CanvasStage({
 }
 
 /* ------------------------------------------------------------------ */
-/* Numeric field                                                       */
+/* Numeric field (Dropdown + Custom Decimal Input via NumberSelect)    */
 /* ------------------------------------------------------------------ */
 
 function NumField({
@@ -431,29 +449,48 @@ function NumField({
   value,
   min,
   max,
-  step = 1,
+  step = "any",
+  options,
+  unit,
   onChange,
 }: {
   label: string;
   value: number;
   min: number;
   max: number;
-  step?: number;
+  step?: number | "any";
+  options?: readonly number[];
+  unit?: string;
   onChange: (v: number) => void;
 }) {
+  const lower = label.toLowerCase();
+  const resolvedOptions =
+    options ??
+    (lower.includes("font size")
+      ? FONT_SIZE_OPTIONS
+      : lower.includes("letter")
+        ? LETTER_SPACING_OPTIONS
+        : lower.includes("line height")
+          ? LINE_HEIGHT_OPTIONS
+          : lower.includes("scale")
+            ? SCALE_OPTIONS
+            : lower.includes("opacity")
+              ? OPACITY_OPTIONS
+              : lower.includes("rotation")
+                ? ROTATION_OPTIONS
+                : PERCENT_OPTIONS);
+
   return (
-    <label className="block">
-      <span className="text-[10px] font-bold uppercase tracking-wider text-ink-soft">{label}</span>
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="mt-1 w-full rounded-lg border border-shell bg-white px-2.5 py-1.5 font-mono text-xs font-bold text-ink focus:border-saffron focus:outline-none"
-      />
-    </label>
+    <NumberSelect
+      label={label}
+      value={value}
+      min={min}
+      max={max}
+      step={step}
+      unit={unit}
+      options={resolvedOptions}
+      onChange={onChange}
+    />
   );
 }
 
@@ -1052,7 +1089,12 @@ export function AdminCampaignsPanel() {
                           />
                         </label>
                       </div>
-                      <NumField label="Letter spacing" value={name.letter_spacing} min={-2} max={12} step={0.5} onChange={(v) => setName({ ...name, letter_spacing: v })} />
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumField label="Letter spacing" value={name.letter_spacing} min={-5} max={24} step="any" onChange={(v) => setName({ ...name, letter_spacing: v })} />
+                        <NumField label="Line height" value={name.line_height ?? 1.2} min={0.5} max={4} step="any" onChange={(v) => setName({ ...name, line_height: v })} />
+                        <NumField label="Text scale" value={name.text_scale ?? 1} min={0.25} max={3} step="any" onChange={(v) => setName({ ...name, text_scale: v })} />
+                        <NumField label="Text opacity" value={name.text_opacity ?? 1} min={0} max={1} step="any" onChange={(v) => setName({ ...name, text_opacity: v })} />
+                      </div>
                     </div>
                   )}
                 </div>

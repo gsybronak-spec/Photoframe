@@ -16,6 +16,8 @@ import {
   OCCASIONS,
   DEFAULT_OCCASION,
   codeMeta,
+  frameSettings,
+  normalizeFrameSettings,
   getAllFrames,
   getFrame,
   resolveFrameSlug,
@@ -23,6 +25,7 @@ import {
   toCatalogFrame,
   type CatalogFrame,
   type Frame,
+  type FrameNumericSettings,
   type Occasion,
 } from "@/lib/frames";
 import { cleanMultiline, cleanText } from "./validation";
@@ -34,6 +37,7 @@ interface OverrideRow {
   tags: string | null;
   featured: number | boolean | string | null;
   active: number | boolean | string | null;
+  settings_json?: string | null;
   updated_at: string;
 }
 
@@ -56,10 +60,19 @@ async function overrides(): Promise<Map<string, OverrideRow>> {
     .all()) as OverrideRow[];
   const map = new Map<string, OverrideRow>();
   for (const r of rows) {
-    map.set(r.frame_id, r);
+    const existingRaw = map.get(r.frame_id);
+    if (!existingRaw || (r.updated_at || "") >= (existingRaw.updated_at || "")) {
+      map.set(r.frame_id, r);
+    }
     const canonical = resolveFrameSlug(r.frame_id);
-    if (canonical && !map.has(canonical)) {
-      map.set(canonical, r);
+    if (canonical) {
+      const existingCanonical = map.get(canonical);
+      if (
+        !existingCanonical ||
+        (r.updated_at || "") >= (existingCanonical.updated_at || "")
+      ) {
+        map.set(canonical, r);
+      }
     }
   }
   return map;
@@ -81,23 +94,58 @@ function parseTags(raw: string | null): string[] | null {
   }
 }
 
+function parseSettingsJson(
+  raw: string | null | undefined,
+  fallback: FrameNumericSettings
+): FrameNumericSettings {
+  if (!raw) return normalizeFrameSettings(undefined, fallback);
+  try {
+    const parsed = JSON.parse(raw) as Partial<FrameNumericSettings>;
+    if (!parsed || typeof parsed !== "object") {
+      return normalizeFrameSettings(undefined, fallback);
+    }
+    return normalizeFrameSettings(parsed, fallback);
+  } catch {
+    return normalizeFrameSettings(undefined, fallback);
+  }
+}
+
+function settingsEqual(a: FrameNumericSettings, b: FrameNumericSettings): boolean {
+  return (
+    a.font_family === b.font_family &&
+    a.font_size === b.font_size &&
+    a.line_height === b.line_height &&
+    a.letter_spacing === b.letter_spacing &&
+    a.text_scale === b.text_scale &&
+    a.text_x === b.text_x &&
+    a.text_y === b.text_y &&
+    a.text_width === b.text_width &&
+    a.text_opacity === b.text_opacity &&
+    a.photo_scale === b.photo_scale &&
+    a.border_opacity === b.border_opacity
+  );
+}
+
 function merge(frame: Frame, row?: OverrideRow): CatalogFrame {
   if (!row) return toCatalogFrame(frame);
   const tags = parseTags(row.tags);
   const cleanCat = row.category ? cleanText(row.category, 40) : "";
   const cleanDesc = row.description ? cleanMultiline(row.description, 320) : "";
+  const baseSettings = frameSettings(frame);
+  const mergedSettings = parseSettingsJson(row.settings_json, baseSettings);
   return toCatalogFrame(frame, {
     active: toOptionalBool(row.active),
     featured: toOptionalBool(row.featured),
     description: cleanDesc || undefined,
     category: (cleanCat as Occasion) || undefined,
     tags: tags ?? undefined,
+    settings: mergedSettings,
     updated_at: row.updated_at,
     overridden: true,
   });
 }
 
-/** Every frame, including inactive ones (admin view). */
+/** Every frame, including inactive ones (admin & frame settings view). */
 export async function getCatalog(): Promise<CatalogFrame[]> {
   const rows = await overrides();
   return getAllFrames().map((f) => merge(f, rows.get(f.slug) ?? rows.get(f.id)));
@@ -118,7 +166,7 @@ export async function getFeaturedFrames(limit = 4): Promise<CatalogFrame[]> {
   );
 }
 
-/** Merged frame by slug — undefined for unknown or (optionally) inactive frames. */
+/** Merged frame by slug/id/alias — undefined for unknown or (optionally) inactive frames. */
 export async function findFrame(
   slug: string,
   opts: { includeInactive?: boolean } = {}
@@ -131,13 +179,13 @@ export async function findFrame(
   return merged;
 }
 
-/** Merged frame for editor/gallery use where an inactive frame is still valid. */
+/** Merged frame for editor/settings/gallery use where an inactive frame is still valid. */
 export async function findAnyFrame(slug: string): Promise<CatalogFrame | undefined> {
   return findFrame(slug, { includeInactive: true });
 }
 
 /* ------------------------------------------------------------------ */
-/* Admin mutations (callers must already have checked the admin role)  */
+/* Admin & Settings mutations                                          */
 /* ------------------------------------------------------------------ */
 
 export interface FramePatch {
@@ -146,6 +194,18 @@ export interface FramePatch {
   tags?: string[];
   featured?: boolean;
   active?: boolean;
+  settings?: Partial<FrameNumericSettings>;
+  font_family?: string;
+  font_size?: number;
+  line_height?: number;
+  letter_spacing?: number;
+  text_scale?: number;
+  text_x?: number;
+  text_y?: number;
+  text_width?: number;
+  text_opacity?: number;
+  photo_scale?: number;
+  border_opacity?: number;
 }
 
 export async function updateFrame(
@@ -167,6 +227,29 @@ export async function updateFrame(
   const rows = await overrides();
   const current = rows.get(canonicalSlug) ?? rows.get(base.id);
   const defaults = codeMeta(base);
+  const currentSettings = parseSettingsJson(current?.settings_json, defaults.settings);
+
+  // Combine nested `patch.settings` and any top-level numeric fields
+  const incomingSettings: Partial<FrameNumericSettings> = {
+    ...(patch.settings ?? {}),
+    ...(patch.font_family !== undefined ? { font_family: patch.font_family } : {}),
+    ...(patch.font_size !== undefined ? { font_size: patch.font_size } : {}),
+    ...(patch.line_height !== undefined ? { line_height: patch.line_height } : {}),
+    ...(patch.letter_spacing !== undefined ? { letter_spacing: patch.letter_spacing } : {}),
+    ...(patch.text_scale !== undefined ? { text_scale: patch.text_scale } : {}),
+    ...(patch.text_x !== undefined ? { text_x: patch.text_x } : {}),
+    ...(patch.text_y !== undefined ? { text_y: patch.text_y } : {}),
+    ...(patch.text_width !== undefined ? { text_width: patch.text_width } : {}),
+    ...(patch.text_opacity !== undefined ? { text_opacity: patch.text_opacity } : {}),
+    ...(patch.photo_scale !== undefined ? { photo_scale: patch.photo_scale } : {}),
+    ...(patch.border_opacity !== undefined ? { border_opacity: patch.border_opacity } : {}),
+  };
+
+  const hasSettingsPatch = Object.keys(incomingSettings).length > 0;
+  const nextSettings = hasSettingsPatch
+    ? normalizeFrameSettings(incomingSettings, currentSettings)
+    : currentSettings;
+  const isDefaultSettings = settingsEqual(nextSettings, defaults.settings);
 
   const cleanedTags =
     patch.tags !== undefined
@@ -216,6 +299,7 @@ export async function updateFrame(
         : patch.active
           ? 1
           : 0,
+    settings_json: isDefaultSettings ? null : JSON.stringify(nextSettings),
   };
 
   // If every value matches the code default, drop the override row entirely so
@@ -225,25 +309,31 @@ export async function updateFrame(
     (next.category === null || next.category === defaults.category) &&
     (next.featured === null || (next.featured === 1) === defaults.featured) &&
     (next.active === null || (next.active === 1) === defaults.active) &&
-    next.tags === null;
+    next.tags === null &&
+    next.settings_json === null;
 
   if (matchesDefaults) {
     await db
       .prepare("DELETE FROM frame_overrides WHERE frame_id = ? OR frame_id = ?")
       .run(canonicalSlug, base.id);
   } else {
+    // Also remove any legacy alias key so only canonicalSlug remains in frame_overrides
+    if (base.id !== canonicalSlug) {
+      await db.prepare("DELETE FROM frame_overrides WHERE frame_id = ?").run(base.id);
+    }
     await db
       .prepare(
-        `INSERT INTO frame_overrides (frame_id, description, category, tags, featured, active, updated_at, updated_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO frame_overrides (frame_id, description, category, tags, featured, active, settings_json, updated_at, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(frame_id) DO UPDATE SET
-         description = excluded.description,
-         category    = excluded.category,
-         tags        = excluded.tags,
-         featured    = excluded.featured,
-         active      = excluded.active,
-         updated_at  = excluded.updated_at,
-         updated_by  = excluded.updated_by`
+         description   = excluded.description,
+         category      = excluded.category,
+         tags          = excluded.tags,
+         featured      = excluded.featured,
+         active        = excluded.active,
+         settings_json = excluded.settings_json,
+         updated_at    = excluded.updated_at,
+         updated_by    = excluded.updated_by`
       )
       .run(
         canonicalSlug,
@@ -252,6 +342,7 @@ export async function updateFrame(
         next.tags,
         next.featured,
         next.active,
+        next.settings_json,
         nowIso(),
         adminId
       );

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { AlertCircle, CheckCircle2, LayoutTemplate, Loader2, Save } from "lucide-react";
+import { FEATURED_LIMIT_OPTIONS, NumberSelect } from "@/components/ui/NumberSelect";
 
 interface Settings {
   hero_tagline: string;
@@ -96,21 +97,18 @@ export function AdminContentPanel() {
             className="w-full rounded-2xl border border-white/70 bg-white/60 px-4 py-3 text-sm text-ink outline-none transition focus:border-saffron focus:bg-white/80"
           />
         </label>
-        <label className="block">
-          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-ink-soft">
-            Featured frames on homepage (1–8)
-          </span>
-          <input
-            type="number"
+        <div className="block">
+          <NumberSelect
+            label="Featured frames on homepage (1–8)"
+            value={settings.featured_limit}
+            onChange={(v) => setSettings({ ...settings, featured_limit: Math.round(v) })}
+            options={FEATURED_LIMIT_OPTIONS.filter((n) => n <= 8)}
             min={1}
             max={8}
-            value={settings.featured_limit}
-            onChange={(e) =>
-              setSettings({ ...settings, featured_limit: Number(e.target.value) })
-            }
-            className="w-full rounded-2xl border border-white/70 bg-white/60 px-4 py-3 text-sm text-ink outline-none transition focus:border-saffron focus:bg-white/80"
+            step={1}
+            size="md"
           />
-        </label>
+        </div>
 
         <div className="sm:col-span-2">
           <p className="text-xs font-semibold uppercase tracking-wide text-ink-soft">

@@ -64,6 +64,77 @@ export interface FrameStyle {
   motif: FrameMotif;
 }
 
+export interface FrameNumericSettings {
+  font_family: string;
+  font_size: number;
+  line_height: number;
+  letter_spacing: number;
+  text_scale: number;
+  text_x: number;
+  text_y: number;
+  text_width: number;
+  text_opacity: number;
+  photo_scale: number;
+  border_opacity: number;
+}
+
+export const DEFAULT_FRAME_SETTINGS: FrameNumericSettings = {
+  font_family: "Fraunces",
+  font_size: 34,
+  line_height: 1.2,
+  letter_spacing: 1,
+  text_scale: 1,
+  text_x: 50,
+  text_y: 76,
+  text_width: 80,
+  text_opacity: 0.85,
+  photo_scale: 1,
+  border_opacity: 0.9,
+};
+
+function roundNum(v: number, decimals = 4): number {
+  if (!Number.isFinite(v)) return 0;
+  const factor = 10 ** decimals;
+  return Math.round((v + Number.EPSILON) * factor) / factor;
+}
+
+function clampDecimal(
+  val: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+  decimals = 4
+): number {
+  if (val === null || val === undefined || val === "") return fallback;
+  const n = typeof val === "number" ? val : Number(String(val).trim());
+  if (!Number.isFinite(n)) return fallback;
+  return roundNum(Math.min(max, Math.max(min, n)), decimals);
+}
+
+export function normalizeFrameSettings(
+  input?: Partial<FrameNumericSettings> | null,
+  fallback: FrameNumericSettings = DEFAULT_FRAME_SETTINGS
+): FrameNumericSettings {
+  const raw = input ?? {};
+  const fontFamily =
+    typeof raw.font_family === "string" && raw.font_family.trim()
+      ? raw.font_family.trim().slice(0, 60)
+      : fallback.font_family;
+  return {
+    font_family: fontFamily,
+    font_size: clampDecimal(raw.font_size, 6, 120, fallback.font_size),
+    line_height: clampDecimal(raw.line_height, 0.5, 4, fallback.line_height),
+    letter_spacing: clampDecimal(raw.letter_spacing, -5, 20, fallback.letter_spacing),
+    text_scale: clampDecimal(raw.text_scale, 0.25, 4, fallback.text_scale),
+    text_x: clampDecimal(raw.text_x, 0, 100, fallback.text_x),
+    text_y: clampDecimal(raw.text_y, 0, 100, fallback.text_y),
+    text_width: clampDecimal(raw.text_width, 10, 100, fallback.text_width),
+    text_opacity: clampDecimal(raw.text_opacity, 0, 1, fallback.text_opacity),
+    photo_scale: clampDecimal(raw.photo_scale, 0.25, 4, fallback.photo_scale),
+    border_opacity: clampDecimal(raw.border_opacity, 0, 1, fallback.border_opacity),
+  };
+}
+
 export interface Frame {
   id: string;
   slug: string;
@@ -82,6 +153,8 @@ export interface Frame {
   style: FrameStyle;
   /** which center art the overlay draws */
   art: FrameArt;
+  /** typography and numerical layout settings */
+  settings?: FrameNumericSettings;
   /** alternate slugs/IDs that resolve to this frame */
   aliases?: string[];
   /** true when category/occasion was missing and defaulted to General */
@@ -103,6 +176,7 @@ export interface FrameInput {
   featured?: boolean;
   style?: Partial<FrameStyle>;
   art?: FrameArt | string;
+  settings?: Partial<FrameNumericSettings>;
   aliases?: string[];
 }
 
@@ -187,12 +261,16 @@ export interface FrameMeta {
   description: string;
   category: Occasion;
   tags: string[];
+  settings: FrameNumericSettings;
   updated_at?: string;
   /** true when an admin override row exists for this frame */
   overridden?: boolean;
 }
 
 export type CatalogFrame = Frame & FrameMeta;
+
+export const frameSettings = (f: Partial<Frame> | undefined): FrameNumericSettings =>
+  normalizeFrameSettings(f?.settings, DEFAULT_FRAME_SETTINGS);
 
 /** Code defaults for a frame, before any admin override is merged in. */
 export function codeMeta(f: Frame): FrameMeta {
@@ -202,6 +280,7 @@ export function codeMeta(f: Frame): FrameMeta {
     description: frameDescription(f),
     category: frameCategory(f),
     tags: frameTags(f),
+    settings: frameSettings(f),
   };
 }
 
@@ -217,6 +296,7 @@ export function toCatalogFrame(f: Frame, meta?: Partial<FrameMeta>): CatalogFram
     meta?.description && String(meta.description).trim()
       ? String(meta.description).trim()
       : base.description;
+  const mergedSettings = normalizeFrameSettings(meta?.settings, base.settings);
 
   return {
     ...f,
@@ -228,6 +308,7 @@ export function toCatalogFrame(f: Frame, meta?: Partial<FrameMeta>): CatalogFram
     occasion: f.occasion || mergedCategory,
     description: mergedDescription,
     tags: mergedTags,
+    settings: mergedSettings,
   };
 }
 
@@ -603,6 +684,7 @@ export function normalizeFrameInput(
     featured: Boolean(input.featured ?? input.trending),
     style,
     art,
+    settings: normalizeFrameSettings(input.settings, DEFAULT_FRAME_SETTINGS),
     aliases: Array.from(aliasSet),
     hasMissingMetadata,
   };
@@ -892,21 +974,36 @@ function centerArt(frame: Frame, cy: number): string {
 /* Overlay layer: art band + title + brand + caption                   */
 /* ------------------------------------------------------------------ */
 
-function overlay(frame: Frame, caption?: string): string {
+function overlay(
+  frame: Frame,
+  caption?: string,
+  customSettings?: Partial<FrameNumericSettings>
+): string {
   const style = { ...DEFAULT_FRAME_STYLE, ...(frame?.style ?? {}) };
   const { accent, ink } = style;
+  const cfg = normalizeFrameSettings(customSettings, frameSettings(frame));
   const title = (frame?.title ?? "ZenFrame").toString();
+
+  const captionX = roundNum((cfg.text_x / 100) * 1000, 2);
+  const captionY = roundNum((cfg.text_y / 100) * 1250, 2);
+  const scaledFontSize = roundNum(cfg.font_size * cfg.text_scale, 2);
+  const letterSpacing = roundNum(cfg.letter_spacing, 2);
+  const lineHeight = roundNum(cfg.line_height, 2);
+  const textOpacity = roundNum(cfg.text_opacity, 3);
+  const borderOpacity = roundNum(cfg.border_opacity, 3);
+  const fontFamily = esc(cfg.font_family || "Fraunces");
+
   return `
-    <g>${centerArt(frame, 1105)}</g>
+    <g opacity="${borderOpacity}">${centerArt(frame, 1105)}</g>
     <text x="500" y="1216" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif"
       font-size="46" letter-spacing="6" fill="${ink}">${esc(title.toUpperCase())}</text>
-    <rect x="420" y="1238" width="160" height="5" rx="2.5" fill="${accent}"/>
+    <rect x="420" y="1238" width="160" height="5" rx="2.5" fill="${accent}" fill-opacity="${borderOpacity}"/>
     <text x="500" y="90" text-anchor="middle" font-family="Arial, sans-serif" font-weight="bold"
       font-size="30" letter-spacing="10" fill="${ink}" fill-opacity="0.55">${BRAND}</text>
     ${
       caption
-        ? `<text x="500" y="950" text-anchor="middle" font-family="Georgia, serif" font-style="italic"
-            font-size="34" fill="${ink}" fill-opacity="0.85">${esc(quote(caption))}</text>`
+        ? `<text x="${captionX}" y="${captionY}" text-anchor="middle" font-family="${fontFamily}, Georgia, serif" font-style="italic"
+            font-size="${scaledFontSize}" letter-spacing="${letterSpacing}" data-line-height="${lineHeight}" fill="${ink}" fill-opacity="${textOpacity}">${esc(quote(caption))}</text>`
         : ""
     }
   `;
@@ -932,7 +1029,8 @@ function esc(s: string): string {
 export function buildFrameSVG(
   frame: Frame,
   photoHref?: string,
-  caption?: string
+  caption?: string,
+  customSettings?: Partial<FrameNumericSettings>
 ): string {
   const style = { ...DEFAULT_FRAME_STYLE, ...(frame?.style ?? {}) };
   const photo = photoHref
@@ -943,14 +1041,14 @@ export function buildFrameSVG(
 
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1000" height="1250" viewBox="0 0 1000 1250">
   <defs>
-    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y1="1">
       <stop offset="0" stop-color="${style.from}"/>
       <stop offset="1" stop-color="${style.to}"/>
     </linearGradient>
   </defs>
   <g>${backdrop(frame)}</g>
   <g>${photo}</g>
-  <g>${overlay(frame, caption)}</g>
+  <g>${overlay(frame, caption, customSettings)}</g>
 </svg>`;
 }
 

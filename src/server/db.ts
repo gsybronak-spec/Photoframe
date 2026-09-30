@@ -220,14 +220,15 @@ CREATE INDEX IF NOT EXISTS idx_activity_created ON activity(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_type ON activity(type, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS frame_overrides (
-  frame_id    TEXT PRIMARY KEY,
-  description TEXT,
-  category    TEXT,
-  tags        TEXT,
-  featured    INTEGER,
-  active      INTEGER,
-  updated_at  TEXT NOT NULL,
-  updated_by  TEXT REFERENCES users(id) ON DELETE SET NULL
+  frame_id      TEXT PRIMARY KEY,
+  description   TEXT,
+  category      TEXT,
+  tags          TEXT,
+  featured      INTEGER,
+  active        INTEGER,
+  settings_json TEXT,
+  updated_at    TEXT NOT NULL,
+  updated_by    TEXT REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -337,7 +338,7 @@ function coerceRow(fields: { name: string; dataTypeId: number }[], row: unknown[
     const v = row[i];
     const t = fields[i]?.dataTypeId;
     let value: unknown = v;
-    if (typeof v === "string" && (t === 20 || t === 1700)) {
+    if (typeof v === "string" && (t === 20 || t === 1700 || t === 700 || t === 701)) {
       const n = Number(v);
       if (Number.isSafeInteger(n) || Number.isFinite(n)) value = n;
     } else if (typeof v === "bigint") {
@@ -437,10 +438,13 @@ CREATE TABLE IF NOT EXISTS campaign_name_configs (
   rotation       REAL NOT NULL DEFAULT 0,
   font_family    TEXT NOT NULL DEFAULT 'Plus Jakarta Sans',
   font_size      REAL NOT NULL DEFAULT 26,
+  line_height    REAL NOT NULL DEFAULT 1.2,
   font_color     TEXT NOT NULL DEFAULT '#fff8f0',
   font_weight    TEXT NOT NULL DEFAULT 'bold' CHECK (font_weight IN ('normal','bold')),
   alignment      TEXT NOT NULL DEFAULT 'center' CHECK (alignment IN ('left','center','right')),
   letter_spacing REAL NOT NULL DEFAULT 1,
+  text_scale     REAL NOT NULL DEFAULT 1,
+  text_opacity   REAL NOT NULL DEFAULT 1,
   updated_at     TEXT NOT NULL
 );
 
@@ -740,6 +744,16 @@ const MIGRATIONS: Migration[] = [
       // Admin campaign studio + anonymous user wizard (artwork base layer,
       // photo mask, name overlay, anonymous generate/share events).
       db.exec(CAMPAIGN_TABLES_SQL);
+    },
+  },
+  {
+    version: 10,
+    name: "frame_settings_and_decimal_typography",
+    up(db) {
+      addColumn(db, "frame_overrides", "settings_json", "TEXT");
+      addColumn(db, "campaign_name_configs", "line_height", "REAL NOT NULL DEFAULT 1.2");
+      addColumn(db, "campaign_name_configs", "text_scale", "REAL NOT NULL DEFAULT 1");
+      addColumn(db, "campaign_name_configs", "text_opacity", "REAL NOT NULL DEFAULT 1");
     },
   },
 ];

@@ -1040,6 +1040,82 @@ async function run() {
     eq(bad.json.accepted, false, "unknown event must be dropped");
   });
 
+  /* ---------------- frame settings, decimal persistence & mobile save ---------------- */
+  section("Frame Settings, Decimal Persistence & Mobile Save");
+
+  await check("GET /api/admin/frames returns all 24 registered frames with settings", async () => {
+    useJar(adminJar);
+    const res = await req("/api/admin/frames");
+    eq(res.status, 200, "admin frames status");
+    eq(res.json.frames?.length, 24, "must return all 24 frames");
+    for (const f of res.json.frames) {
+      assert(f.slug && f.id && f.settings, `frame ${f.slug} missing id or settings`);
+    }
+  });
+
+  await check("PATCH /api/admin/frames/:slug persists exact decimals (10.1, 10.5, 12.75, -0.5, 1.5) and resolves legacy alias", async () => {
+    useJar(adminJar);
+    const patchRes = await req("/api/admin/frames/f-iyd-2026", {
+      method: "PATCH",
+      body: {
+        active: false,
+        settings: {
+          font_family: "Playfair Display",
+          font_size: 10.1,
+          line_height: 1.5,
+          letter_spacing: -0.5,
+          text_scale: 1.25,
+          text_x: 10.5,
+          text_y: 12.75,
+          text_width: 84.5,
+          text_opacity: 0.95,
+          photo_scale: 1.15,
+          border_opacity: 0.85,
+        },
+      },
+    });
+    eq(patchRes.status, 200, "patch via legacy alias status");
+    eq(patchRes.json.frame?.slug, "international-yoga-day", "canonical slug returned");
+    eq(patchRes.json.frame?.settings?.font_size, 10.1, "font_size 10.1 preserved");
+    eq(patchRes.json.frame?.settings?.line_height, 1.5, "line_height 1.5 preserved");
+    eq(patchRes.json.frame?.settings?.letter_spacing, -0.5, "letter_spacing -0.5 preserved");
+    eq(patchRes.json.frame?.settings?.text_x, 10.5, "text_x 10.5 preserved");
+    eq(patchRes.json.frame?.settings?.text_y, 12.75, "text_y 12.75 preserved");
+
+    // Re-open frame page even while active=false (must not 404!)
+    const pageRes = await req("/frames/international-yoga-day", { raw: true });
+    eq(pageRes.status, 200, "re-opening inactive frame in editor must return 200");
+
+    // Verify GET /api/frames/:slug/settings returns the persisted decimals & all 24 frames
+    const getSettings = await req("/api/frames/f-iyd-2026/settings");
+    eq(getSettings.status, 200, "get settings status");
+    eq(getSettings.json.frame?.settings?.font_size, 10.1, "reloaded font_size 10.1");
+    eq(getSettings.json.frame?.settings?.text_y, 12.75, "reloaded text_y 12.75");
+    eq(getSettings.json.frames?.length, 24, "all 24 frames present in selector list");
+
+    // Re-activate international-yoga-day
+    const restore = await req("/api/admin/frames/international-yoga-day", {
+      method: "PATCH",
+      body: { active: true },
+    });
+    eq(restore.status, 200, "restore active status");
+  });
+
+  await check("POST /api/creations accepts alias slug and canonicalizes to frame.slug", async () => {
+    useJar(adminJar);
+    const res = await req("/api/creations", {
+      method: "POST",
+      body: {
+        frameSlug: "f-still-lake",
+        caption: "Mobile save test",
+        imageDataUrl: PNG_DATA_URL,
+        thumbDataUrl: PNG_DATA_URL,
+      },
+    });
+    eq(res.status, 201, "mobile save creation status");
+    eq(res.json.creation?.frameSlug, "still-lake-meditation", "canonical frameSlug stored");
+  });
+
   /* ---------------- account deletion ---------------- */
   section("Account deletion");
 

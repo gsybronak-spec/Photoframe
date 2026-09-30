@@ -43,6 +43,9 @@ export interface CampaignNameConfig {
   font_weight: "normal" | "bold";
   alignment: "left" | "center" | "right";
   letter_spacing: number;
+  line_height?: number;
+  text_scale?: number;
+  text_opacity?: number;
 }
 
 export interface ComposeInput {
@@ -200,13 +203,16 @@ export async function composeCampaignFrame(input: ComposeInput): Promise<string>
     const ny = pct(name.y, H, 78);
 
     // Font sizes are tuned on a 450px-wide reference stage in the studio;
-    // scale proportionally to the output canvas.
-    const fontScale = W / 450;
-    const fontSize = Math.round((Number(name.font_size) || 26) * fontScale);
+    // scale proportionally to the output canvas (preserving decimal font_size and text_scale).
+    const fontScale = (W / 450) * (Number(name.text_scale) || 1);
+    const fontSize = Math.round((Number(name.font_size) || 26) * fontScale * 100) / 100;
 
     ctx.save();
     ctx.translate(nx + nw / 2, ny + nh / 2);
     if (name.rotation) ctx.rotate((name.rotation * Math.PI) / 180);
+    if (name.text_opacity !== undefined && Number.isFinite(Number(name.text_opacity))) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, Number(name.text_opacity)));
+    }
 
     ctx.font = `${name.font_weight === "bold" ? "bold " : ""}${fontSize}px "${name.font_family}", sans-serif`;
     ctx.fillStyle = name.font_color || "#fff8f0";

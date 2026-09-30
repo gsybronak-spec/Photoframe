@@ -1,25 +1,28 @@
 import { revalidatePath } from "next/cache";
-import { requireAdmin, ok, fail, assertSameOrigin, guardRate, readJson, serverError } from "@/server/api";
-import { findAnyFrame, updateFrame, type FramePatch } from "@/server/frame-catalog";
-import { logEvent } from "@/server/activity";
+import { ok, fail, assertSameOrigin, guardRate, readJson, serverError } from "@/server/api";
+import { getCurrentUser } from "@/server/sessions";
+import { findAnyFrame, getCatalog, updateFrame, type FramePatch } from "@/server/frame-catalog";
 import { cleanSlug } from "@/server/validation";
 import type { FrameNumericSettings } from "@/lib/frames";
 
 /**
- * GET /api/admin/frames/:slug — fetch a single frame (canonical slug or alias) with settings.
+ * GET /api/frames/:slug/settings — returns the resolved frame settings (with DB overrides + code defaults)
+ * and the full 24-frame selector list so Frame Settings never loses any frame.
  */
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ slug: string }> }
 ) {
-  const { error } = await requireAdmin();
-  if (error) return error;
   try {
     const { slug } = await params;
     const safeSlug = cleanSlug(slug);
     if (!safeSlug) return fail("Unknown frame.", "NOT_FOUND");
+
     const frame = await findAnyFrame(safeSlug);
     if (!frame) return fail("Unknown frame.", "NOT_FOUND");
+
+    const catalog = await getCatalog();
+
     return ok({
       frame: {
         id: frame.id,
@@ -28,42 +31,44 @@ export async function GET(
         occasion: frame.occasion,
         tagline: frame.tagline,
         art: frame.art,
-        description: frame.description,
         category: frame.category,
+        description: frame.description,
         tags: frame.tags,
-        featured: frame.featured,
         active: frame.active,
+        featured: frame.featured,
         settings: frame.settings,
         overridden: Boolean(frame.overridden),
         updatedAt: frame.updated_at ?? null,
       },
+      frames: catalog.map((f) => ({
+        id: f.id,
+        slug: f.slug,
+        title: f.title,
+        occasion: f.occasion,
+        category: f.category,
+        active: f.active,
+        featured: f.featured,
+        settings: f.settings,
+      })),
     });
   } catch (err) {
-    return serverError("admin:frame-get", err);
+    return serverError("frames:settings-get", err);
   }
 }
 
 /**
- * PATCH /api/admin/frames/:slug — manage frame metadata & numerical/typography settings.
- * Body: { description?, category?, tags?, featured?, active?, settings?, font_size?, line_height?, letter_spacing?, ... }
+ * PATCH /api/frames/:slug/settings — persists numerical & typography frame settings
+ * to the database (`frame_overrides.settings_json`) so settings survive page refresh and re-opening.
  */
 export async function PATCH(
   req: Request,
   { params }: { params: Promise<{ slug: string }> }
 ) {
-  const limited = await guardRate(req, "admin-frame-patch", 120, 10 * 60 * 1000);
+  const limited = await guardRate(req, "frame-settings-patch", 120, 10 * 60 * 1000);
   if (limited) return limited;
   if (!assertSameOrigin(req)) return fail("Bad origin", "FORBIDDEN");
 
-  const { user: admin, error } = await requireAdmin();
-  if (error) return error;
-
   const body = await readJson<{
-    description?: string;
-    category?: string;
-    tags?: unknown;
-    featured?: boolean;
-    active?: boolean;
     settings?: Partial<FrameNumericSettings>;
     font_family?: string;
     font_size?: number;
@@ -84,22 +89,8 @@ export async function PATCH(
     const safeSlug = cleanSlug(slug);
     if (!safeSlug) return fail("Unknown frame.", "NOT_FOUND");
 
+    const user = await getCurrentUser();
     const patch: FramePatch = {};
-    if (body.description !== undefined) patch.description = String(body.description);
-    if (body.category !== undefined) patch.category = String(body.category);
-    if (body.featured !== undefined) patch.featured = Boolean(body.featured);
-    if (body.active !== undefined) patch.active = Boolean(body.active);
-    if (body.tags !== undefined) {
-      const tags = Array.isArray(body.tags)
-        ? body.tags.map((t) => String(t)).slice(0, 8)
-        : String(body.tags)
-            .split(",")
-            .map((t) => t.trim())
-            .filter(Boolean)
-            .slice(0, 8);
-      patch.tags = tags;
-    }
-
     if (body.settings && typeof body.settings === "object") {
       patch.settings = body.settings;
     }
@@ -115,7 +106,7 @@ export async function PATCH(
     if (body.photo_scale !== undefined) patch.photo_scale = body.photo_scale;
     if (body.border_opacity !== undefined) patch.border_opacity = body.border_opacity;
 
-    const updated = await updateFrame(safeSlug, patch, admin.id);
+    const updated = await updateFrame(safeSlug, patch, user?.id ?? "editor");
     if (!updated) return fail("Unknown frame.", "NOT_FOUND");
 
     try {
@@ -123,36 +114,20 @@ export async function PATCH(
       revalidatePath("/frames");
       revalidatePath(`/frames/${updated.slug}`);
     } catch {
-      // Ignore if called outside static generation context
+      // Ignore outside static generation context
     }
-
-    await logEvent(
-      admin.id,
-      "admin_action",
-      `Updated frame “${updated.title}”`,
-      { frame: updated.slug, fields: Object.keys(patch) },
-      admin.id
-    );
 
     return ok({
       frame: {
         id: updated.id,
         slug: updated.slug,
         title: updated.title,
-        occasion: updated.occasion,
-        tagline: updated.tagline,
-        art: updated.art,
-        description: updated.description,
-        category: updated.category,
-        tags: updated.tags,
-        featured: updated.featured,
-        active: updated.active,
         settings: updated.settings,
         overridden: Boolean(updated.overridden),
         updatedAt: updated.updated_at ?? null,
       },
     });
   } catch (err) {
-    return serverError("admin:frame-patch", err);
+    return serverError("frames:settings-patch", err);
   }
 }

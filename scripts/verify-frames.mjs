@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import {
   FRAMES,
-  FRAME_REGISTRY,
   OCCASIONS,
   DEFAULT_OCCASION,
+  DEFAULT_FRAME_SETTINGS,
   getAllFrames,
   getFrame,
   resolveFrameSlug,
   getAvailableOccasions,
   validateFrameRegistry,
+  normalizeFrameSettings,
   buildFrameSVG,
   buildThumbSVG,
   svgToDataURI,
@@ -16,8 +17,9 @@ import {
   frameCategory,
   frameTags,
 } from "../src/lib/frames.ts";
+import { cleanDecimal, roundDec } from "../src/server/validation.ts";
 
-console.log("=== ZenFrame Registry & Rendering Verification ===");
+console.log("=== ZenFrame Comprehensive Registry, Settings, Decimal & SVG Verification ===");
 
 // 1. Registry count & uniqueness
 const allFrames = getAllFrames();
@@ -45,7 +47,6 @@ for (const frame of allFrames) {
   assert.equal(resolveFrameSlug(frame.id), frame.slug, `resolveFrameSlug(${frame.id}) failed`);
 }
 
-// Specifically verify the 4 legacy ID != slug mismatches
 const mismatchPairs = [
   ["f-iyd-2026", "international-yoga-day"],
   ["iyd-2026", "international-yoga-day"],
@@ -65,9 +66,27 @@ for (const [alias, expectedSlug] of mismatchPairs) {
 }
 console.log(`✓ 2. All 24 slugs, IDs, and ${mismatchPairs.length} legacy aliases resolve to canonical slugs`);
 
-// 3. SVG Renderer verification (buildFrameSVG + buildThumbSVG) for all 24 frames
+// 3. SVG Renderer verification (buildFrameSVG + buildThumbSVG + custom decimal settings) for all 24 frames
 for (const frame of allFrames) {
-  const compositeSvg = buildFrameSVG(frame, "data:image/png;base64,iVBORw0KGgo=", "Namaste & Peace <2026>");
+  const customDecimalSettings = normalizeFrameSettings({
+    font_family: "Playfair Display",
+    font_size: 10.5,
+    line_height: 1.25,
+    letter_spacing: 1.5,
+    text_scale: 1.15,
+    text_x: 50.5,
+    text_y: 82.75,
+    text_width: 84.5,
+    text_opacity: 0.95,
+    photo_scale: 1.05,
+    border_opacity: 0.85,
+  });
+  const compositeSvg = buildFrameSVG(
+    frame,
+    "data:image/png;base64,iVBORw0KGgo=",
+    "Namaste & Peace <2026>",
+    customDecimalSettings
+  );
   const thumbSvg = buildThumbSVG(frame);
   const dataUri = svgToDataURI(thumbSvg);
 
@@ -80,7 +99,7 @@ for (const frame of allFrames) {
   assert.ok(!thumbSvg.includes("&amp;amp;"), `Double-escaped entity in thumb SVG for ${frame.slug}`);
   assert.ok(dataUri.startsWith("data:image/svg+xml;utf8,"), `Invalid data URI for ${frame.slug}`);
 }
-console.log("✓ 3. All 24 frames render valid composite SVGs and thumbnail SVGs (zero double-escaping or undefined values)");
+console.log("✓ 3. All 24 frames render valid composite SVGs and thumbnail SVGs with decimal typography settings");
 
 // 4. Duplicate slug & Missing metadata edge-case verification
 const edgeReport = validateFrameRegistry([
@@ -106,7 +125,6 @@ const edgeReport = validateFrameRegistry([
     id: "f-missing-meta",
     slug: "missing-metadata-frame",
     title: "Frame Without Category",
-    // Intentionally omit occasion & category
     tagline: "Should default to General and never be hidden",
     style: { from: "#ffffff", to: "#000000", accent: "#ff8a3d", ink: "#111111", motif: "waves" },
     art: "sun",
@@ -119,7 +137,6 @@ assert.equal(edgeReport.duplicateIds.length, 1, "Should detect 1 duplicate ID");
 assert.equal(edgeReport.missingMetadataSlugs.includes("missing-metadata-frame"), true, "Should record missing metadata slug");
 assert.equal(edgeReport.uniqueSlugs, 3, "Duplicate slug should be auto-disambiguated so all 3 frames remain accessible");
 
-// Verify missing metadata frame gets placed in DEFAULT_OCCASION ("General") and appears in getAvailableOccasions
 const dynamicOccasions = getAvailableOccasions([
   ...allFrames,
   { category: DEFAULT_OCCASION, occasion: DEFAULT_OCCASION },
@@ -149,4 +166,39 @@ for (const f of catalogFrames) {
   assert.ok(tags.length > 0, `Frame ${f.slug} must have non-empty search tags`);
 }
 console.log("✓ 5. Category & Search filter parity verified: 24/24 frames accounted for across all categories");
-console.log("=== ALL FRAME VERIFICATION CHECKS PASSED ===");
+
+// 6. Decimal Validation & Normalization Tests (10, 10.1, 10.5, 12.75, 0.5, 1.5, 2.0, -0.5, -1.5)
+const decimalTestCases = [10, 10.1, 10.5, 12.75, 0.5, 1.5, 2.0, -0.5, -1.5];
+for (const val of decimalTestCases) {
+  assert.equal(roundDec(val, 4), val, `roundDec(${val}) must preserve exact decimal value`);
+  assert.equal(cleanDecimal(val, -20, 200, 0, 4), val, `cleanDecimal(${val}) must preserve exact decimal value`);
+  assert.equal(cleanDecimal(String(val), -20, 200, 0, 4), val, `cleanDecimal("${val}") must parse and preserve exact decimal value`);
+}
+
+const normalizedSettings = normalizeFrameSettings({
+  font_family: "Plus Jakarta Sans",
+  font_size: 10.1,
+  line_height: 1.5,
+  letter_spacing: -0.5,
+  text_scale: 1.25,
+  text_x: 10.5,
+  text_y: 12.75,
+  text_width: 84.5,
+  text_opacity: 0.85,
+  photo_scale: 1.15,
+  border_opacity: 0.95,
+});
+assert.equal(normalizedSettings.font_size, 10.1, "normalizeFrameSettings must preserve font_size 10.1");
+assert.equal(normalizedSettings.line_height, 1.5, "normalizeFrameSettings must preserve line_height 1.5");
+assert.equal(normalizedSettings.letter_spacing, -0.5, "normalizeFrameSettings must preserve letter_spacing -0.5");
+assert.equal(normalizedSettings.text_scale, 1.25, "normalizeFrameSettings must preserve text_scale 1.25");
+assert.equal(normalizedSettings.text_x, 10.5, "normalizeFrameSettings must preserve text_x 10.5");
+assert.equal(normalizedSettings.text_y, 12.75, "normalizeFrameSettings must preserve text_y 12.75");
+assert.equal(normalizedSettings.text_width, 84.5, "normalizeFrameSettings must preserve text_width 84.5");
+assert.equal(normalizedSettings.text_opacity, 0.85, "normalizeFrameSettings must preserve text_opacity 0.85");
+assert.equal(normalizedSettings.photo_scale, 1.15, "normalizeFrameSettings must preserve photo_scale 1.15");
+assert.equal(normalizedSettings.border_opacity, 0.95, "normalizeFrameSettings must preserve border_opacity 0.95");
+assert.equal(DEFAULT_FRAME_SETTINGS.font_size, 34, "DEFAULT_FRAME_SETTINGS baseline intact");
+
+console.log("✓ 6. Exact decimal values (10, 10.1, 10.5, 12.75, 0.5, 1.5, 2.0, -0.5, -1.5) preserved without rounding");
+console.log("=== ALL FRAME, SETTINGS & DECIMAL VERIFICATION CHECKS PASSED ===");

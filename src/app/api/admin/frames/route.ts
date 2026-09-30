@@ -10,6 +10,7 @@ export async function GET() {
     const catalog = await getCatalog();
     return ok({
       frames: catalog.map((f) => ({
+        id: f.id,
         slug: f.slug,
         title: f.title,
         occasion: f.occasion,
@@ -20,6 +21,7 @@ export async function GET() {
         tags: f.tags,
         active: f.active,
         featured: f.featured,
+        settings: f.settings,
         overridden: Boolean(f.overridden),
         updatedAt: f.updated_at ?? null,
       })),

@@ -44,6 +44,35 @@ export function isStrongEnough(problems: string[]): boolean {
   return problems.length === 0;
 }
 
+/**
+ * Rounds a floating-point number to at most `decimals` fractional digits
+ * (default 4) to eliminate IEEE-754 noise (e.g. 10.100000000000001 -> 10.1)
+ * while preserving exact decimal inputs such as 10.1, 10.5, 12.75, 1.5, 0.5, -0.5, -1.5.
+ */
+export function roundDec(value: number, decimals = 4): number {
+  if (!Number.isFinite(value)) return 0;
+  const factor = 10 ** decimals;
+  return Math.round((value + Number.EPSILON) * factor) / factor;
+}
+
+/**
+ * Parses and clamps a numeric input (number or numeric string) into [min, max]
+ * while preserving decimal precision. Never truncates decimals to integers.
+ */
+export function cleanDecimal(
+  value: unknown,
+  min: number,
+  max: number,
+  fallback: number,
+  decimals = 4
+): number {
+  if (value === null || value === undefined || value === "") return fallback;
+  const parsed = typeof value === "number" ? value : Number(String(value).trim());
+  if (!Number.isFinite(parsed)) return fallback;
+  const clamped = Math.min(max, Math.max(min, parsed));
+  return roundDec(clamped, decimals);
+}
+
 /* ------------------------------------------------------------------ */
 /* Pagination                                                          */
 /* ------------------------------------------------------------------ */

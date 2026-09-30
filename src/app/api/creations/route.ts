@@ -20,6 +20,7 @@ import { logEvent } from "@/server/activity";
 import { track } from "@/server/analytics";
 import { getEntitlements } from "@/server/entitlements";
 import { findAnyFrame } from "@/server/frame-catalog";
+import { resolveFrameSlug } from "@/lib/frames";
 import {
   ok,
   fail,
@@ -31,8 +32,8 @@ import {
   serverError,
 } from "@/server/api";
 
-const MAX_FULL_BYTES = 6 * 1024 * 1024; // 6 MB composite PNG ceiling
-const MAX_THUMB_BYTES = 500 * 1024; // 500 KB dashboard thumbnail
+const MAX_FULL_BYTES = 10 * 1024 * 1024; // 10 MB composite ceiling (mobile high-DPI safe)
+const MAX_THUMB_BYTES = 800 * 1024; // 800 KB dashboard thumbnail
 
 export interface CreationListItem {
   id: string;
@@ -65,7 +66,7 @@ interface CreationRow {
 export function toListItem(row: CreationRow): CreationListItem {
   return {
     id: row.id,
-    frameSlug: row.frame_id,
+    frameSlug: resolveFrameSlug(row.frame_id) ?? row.frame_id,
     caption: row.caption,
     bytes: row.bytes,
     thumbBytes: row.thumb_bytes ?? 0,
@@ -164,10 +165,11 @@ export async function POST(req: Request) {
   if (!body) return fail("Invalid request body", "BAD_REQUEST");
 
   try {
-    const frameSlug = cleanSlug(body.frameSlug);
-    if (!frameSlug) return fail("Which frame is this for?");
-    const frame = await findAnyFrame(frameSlug);
+    const rawSlug = cleanSlug(body.frameSlug);
+    if (!rawSlug) return fail("Which frame is this for?");
+    const frame = await findAnyFrame(rawSlug);
     if (!frame) return fail("Unknown frame.", "NOT_FOUND");
+    const frameSlug = frame.slug;
 
     const entitlements = await getEntitlements(user.id);
     if (!entitlements.canCreate) {

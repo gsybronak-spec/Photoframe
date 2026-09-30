@@ -13,7 +13,7 @@
 
 import { getDb, nowIso } from "./db";
 import { generateToken } from "./passwords";
-import { cleanText } from "./validation";
+import { cleanDecimal, cleanText, roundDec } from "./validation";
 
 export type CampaignStatus = "draft" | "active" | "paused" | "archived";
 export const CAMPAIGN_STATUSES: CampaignStatus[] = [
@@ -80,6 +80,9 @@ export interface CampaignNameConfig {
   font_weight: "normal" | "bold";
   alignment: "left" | "center" | "right";
   letter_spacing: number;
+  line_height?: number;
+  text_scale?: number;
+  text_opacity?: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -90,18 +93,16 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
 }
 
-const round1 = (v: number) => Math.round(v * 10) / 10;
-
 /**
  * Coordinates are percentages of the canvas. Some sources stored raw pixels;
  * anything above 100 is interpreted as pixels and converted. Auto-heals so
- * one bad row can never break a composition.
+ * one bad row can never break a composition. Preserves decimal precision.
  */
 export function normalizeCoord(value: unknown, total: number, fallback: number): number {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
-  if (n > 100) return round1(clamp((n / total) * 100, 0, 100));
-  return round1(clamp(n, 0, 100));
+  if (n > 100) return roundDec(clamp((n / total) * 100, 0, 100), 4);
+  return roundDec(clamp(n, 0, 100), 4);
 }
 
 /** Clamps a geometry rect into sane bounds (percent coords, 4% min size). */
@@ -111,14 +112,14 @@ export function clampRect(rect: {
   width: number;
   height: number;
 }): { x: number; y: number; width: number; height: number } {
-  const width = clamp(round1(Number(rect.width) || 0), 4, 100);
-  const height = clamp(round1(Number(rect.height) || 0), 4, 100);
-  const x = clamp(round1(Number(rect.x) || 0), 0, 100 - width);
-  const y = clamp(round1(Number(rect.y) || 0), 0, 100 - height);
+  const width = clamp(roundDec(Number(rect.width) || 0, 4), 4, 100);
+  const height = clamp(roundDec(Number(rect.height) || 0, 4), 4, 100);
+  const x = clamp(roundDec(Number(rect.x) || 0, 4), 0, roundDec(100 - width, 4));
+  const y = clamp(roundDec(Number(rect.y) || 0, 4), 0, roundDec(100 - height, 4));
   return { x, y, width, height };
 }
 
-const CLAMPED_ROTATION = (v: unknown) => clamp(round1(Number(v) || 0), -180, 180);
+const CLAMPED_ROTATION = (v: unknown) => cleanDecimal(v, -180, 180, 0, 4);
 
 export function cleanColor(v: unknown, fallback: string): string {
   if (typeof v !== "string") return fallback;
@@ -131,8 +132,8 @@ export function normalizePhotoConfig(input: unknown): CampaignPhotoConfig {
   const raw = (input ?? {}) as Record<string, unknown>;
   const shape: PhotoShape = raw.shape === "circle" ? "circle" : "square";
   const rect = clampRect({
-    x: Number(raw.x) || 30,
-    y: Number(raw.y) || 35,
+    x: Number.isFinite(Number(raw.x)) && raw.x !== "" && raw.x != null ? Number(raw.x) : 30,
+    y: Number.isFinite(Number(raw.y)) && raw.y !== "" && raw.y != null ? Number(raw.y) : 35,
     width: Number(raw.width) || 40,
     height: Number(raw.height) || 30,
   });
@@ -144,12 +145,12 @@ export function normalizePhotoConfig(input: unknown): CampaignPhotoConfig {
   };
 }
 
-/** Normalizes a name config payload from an admin request. */
+/** Normalizes a name config payload from an admin request, preserving decimal typography values. */
 export function normalizeNameConfig(input: unknown): CampaignNameConfig {
   const raw = (input ?? {}) as Record<string, unknown>;
   const rect = clampRect({
-    x: Number(raw.x) || 20,
-    y: Number(raw.y) || 78,
+    x: Number.isFinite(Number(raw.x)) && raw.x !== "" && raw.x != null ? Number(raw.x) : 20,
+    y: Number.isFinite(Number(raw.y)) && raw.y !== "" && raw.y != null ? Number(raw.y) : 78,
     width: Number(raw.width) || 60,
     height: Number(raw.height) || 12,
   });
@@ -159,12 +160,15 @@ export function normalizeNameConfig(input: unknown): CampaignNameConfig {
     ...rect,
     rotation: CLAMPED_ROTATION(raw.rotation),
     font_family: cleanText(raw.font_family, 60) || "Plus Jakarta Sans",
-    font_size: clamp(Math.round(Number(raw.font_size) || 26), 10, 120),
+    font_size: cleanDecimal(raw.font_size, 6, 120, 26, 4),
     font_color: cleanColor(raw.font_color, "#fff8f0"),
     font_weight: raw.font_weight === "normal" ? "normal" : "bold",
     alignment:
       alignment === "left" || alignment === "right" ? (alignment as CampaignNameConfig["alignment"]) : "center",
-    letter_spacing: clamp(Math.round((Number(raw.letter_spacing) ?? 1) * 10) / 10, -2, 12),
+    letter_spacing: cleanDecimal(raw.letter_spacing, -5, 24, 1, 4),
+    line_height: cleanDecimal(raw.line_height, 0.5, 4, 1.2, 4),
+    text_scale: cleanDecimal(raw.text_scale, 0.25, 3, 1, 4),
+    text_opacity: cleanDecimal(raw.text_opacity, 0, 1, 1, 4),
   };
 }
 
@@ -222,6 +226,9 @@ interface ConfigDbRow {
   font_weight: string | null;
   alignment: string | null;
   letter_spacing: number | null;
+  line_height: number | null;
+  text_scale: number | null;
+  text_opacity: number | null;
 }
 
 const CAMPAIGN_SELECT = `
@@ -232,7 +239,9 @@ const CAMPAIGN_SELECT = `
          n.width    AS n_w,       n.height AS n_h,     n.rotation AS n_rot,
          n.font_family AS font_family, n.font_size AS font_size,
          n.font_color  AS font_color,  n.font_weight AS font_weight,
-         n.alignment   AS alignment,   n.letter_spacing AS letter_spacing
+         n.alignment   AS alignment,   n.letter_spacing AS letter_spacing,
+         n.line_height AS line_height, n.text_scale AS text_scale,
+         n.text_opacity AS text_opacity
     FROM campaigns c
     LEFT JOIN campaign_photo_configs p ON p.campaign_id = c.id
     LEFT JOIN campaign_name_configs  n ON n.campaign_id = c.id`;
@@ -253,11 +262,11 @@ function hydrate(row: CampaignDbRow & Partial<ConfigDbRow>): CampaignRow & {
     artwork_bytes: row.artwork_bytes,
     canvas_width: row.canvas_width,
     canvas_height: row.canvas_height,
-    art_x: row.art_x,
-    art_y: row.art_y,
-    art_w: row.art_w,
-    art_h: row.art_h,
-    art_rotation: row.art_rotation,
+    art_x: Number(row.art_x),
+    art_y: Number(row.art_y),
+    art_w: Number(row.art_w),
+    art_h: Number(row.art_h),
+    art_rotation: Number(row.art_rotation),
     created_by: row.created_by,
     activated_at: row.activated_at,
     created_at: row.created_at,
@@ -294,6 +303,9 @@ function hydrate(row: CampaignDbRow & Partial<ConfigDbRow>): CampaignRow & {
             ? row.alignment
             : "center") as CampaignNameConfig["alignment"],
           letter_spacing: Number(row.letter_spacing),
+          line_height: row.line_height != null ? Number(row.line_height) : 1.2,
+          text_scale: row.text_scale != null ? Number(row.text_scale) : 1,
+          text_opacity: row.text_opacity != null ? Number(row.text_opacity) : 1,
         }
       : null;
 
@@ -529,8 +541,8 @@ export async function createCampaign(
       .prepare(
         `INSERT INTO campaign_name_configs
            (campaign_id, enabled, x, y, width, height, rotation, font_family, font_size,
-            font_color, font_weight, alignment, letter_spacing, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            font_color, font_weight, alignment, letter_spacing, line_height, text_scale, text_opacity, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -546,6 +558,9 @@ export async function createCampaign(
         nameCfg.font_weight,
         nameCfg.alignment,
         nameCfg.letter_spacing,
+        nameCfg.line_height ?? 1.2,
+        nameCfg.text_scale ?? 1,
+        nameCfg.text_opacity ?? 1,
         now
       );
   });
@@ -669,7 +684,8 @@ export async function updateCampaign(
           `UPDATE campaign_name_configs
               SET enabled = ?, x = ?, y = ?, width = ?, height = ?, rotation = ?,
                   font_family = ?, font_size = ?, font_color = ?, font_weight = ?,
-                  alignment = ?, letter_spacing = ?, updated_at = ?
+                  alignment = ?, letter_spacing = ?, line_height = ?, text_scale = ?,
+                  text_opacity = ?, updated_at = ?
             WHERE campaign_id = ?`
         )
         .run(
@@ -685,6 +701,9 @@ export async function updateCampaign(
           nameCfg.font_weight,
           nameCfg.alignment,
           nameCfg.letter_spacing,
+          nameCfg.line_height ?? 1.2,
+          nameCfg.text_scale ?? 1,
+          nameCfg.text_opacity ?? 1,
           now,
           id
         );

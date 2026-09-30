@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Clock, ShieldCheck } from "lucide-react";
 import { getAllFrames, buildThumbSVG, svgToDataURI, type Frame } from "@/lib/frames";
-import { findFrame, getPublicFrames } from "@/server/frame-catalog";
+import { findAnyFrame, getCatalog, getPublicFrames } from "@/server/frame-catalog";
 import { FrameEditor } from "@/components/FrameEditor";
 import { FrameCard } from "@/components/FrameCard";
 import { Reveal } from "@/components/Reveal";
@@ -24,7 +24,7 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const frame = await findFrame(slug, { includeInactive: true });
+  const frame = await findAnyFrame(slug);
   if (!frame) return {};
 
   const title = `${frame.title} — Yoga Photo Frame`;
@@ -65,10 +65,12 @@ export default async function FramePage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  // Inactive frames are hidden from the public site entirely.
-  const frame = await findFrame(slug);
+  // Always resolve any registered frame (canonical slug or alias, active or inactive)
+  // so refreshing or re-opening a frame never causes a 404 or disappears.
+  const frame = await findAnyFrame(slug);
   if (!frame) notFound();
 
+  const catalog = await getCatalog();
   const categoryLabel = frame.category || "General";
 
   const related = (await getPublicFrames())
@@ -138,7 +140,7 @@ export default async function FramePage({
       </Reveal>
 
       <Reveal delay={0.1} className="mt-10">
-        <FrameEditor frame={frame} />
+        <FrameEditor frame={frame} allFrames={catalog} />
       </Reveal>
 
       {related.length > 0 && (

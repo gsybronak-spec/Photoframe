@@ -109,14 +109,15 @@ CREATE INDEX IF NOT EXISTS idx_activity_type ON activity(type, created_at DESC);
 
 -- Admin-editable frame metadata overrides (artwork lives in src/lib/frames.ts).
 CREATE TABLE IF NOT EXISTS frame_overrides (
-  frame_id    TEXT PRIMARY KEY,
-  description TEXT,
-  category    TEXT,
-  tags        TEXT,
-  featured    INTEGER,
-  active      INTEGER,
-  updated_at  TEXT NOT NULL,
-  updated_by  TEXT REFERENCES users(id) ON DELETE SET NULL
+  frame_id      TEXT PRIMARY KEY,
+  description   TEXT,
+  category      TEXT,
+  tags          TEXT,
+  featured      INTEGER,
+  active        INTEGER,
+  settings_json TEXT,
+  updated_at    TEXT NOT NULL,
+  updated_by    TEXT REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -214,10 +215,13 @@ CREATE TABLE IF NOT EXISTS campaign_name_configs (
   rotation       REAL NOT NULL DEFAULT 0,
   font_family    TEXT NOT NULL DEFAULT 'Plus Jakarta Sans',
   font_size      REAL NOT NULL DEFAULT 26,
+  line_height    REAL NOT NULL DEFAULT 1.2,
   font_color     TEXT NOT NULL DEFAULT '#fff8f0',
   font_weight    TEXT NOT NULL DEFAULT 'bold' CHECK (font_weight IN ('normal','bold')),
   alignment      TEXT NOT NULL DEFAULT 'center' CHECK (alignment IN ('left','center','right')),
   letter_spacing REAL NOT NULL DEFAULT 1,
+  text_scale     REAL NOT NULL DEFAULT 1,
+  text_opacity   REAL NOT NULL DEFAULT 1,
   updated_at     TEXT NOT NULL
 );
 
