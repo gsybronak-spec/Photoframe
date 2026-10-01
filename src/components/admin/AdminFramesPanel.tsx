@@ -420,7 +420,7 @@ export function AdminFramesPanel() {
               setLoading(true);
               void load();
             }}
-            className="btn-ghost flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-semibold text-ink"
+            className="btn-ghost flex min-h-[44px] items-center gap-1.5 rounded-full px-4 py-2.5 text-xs font-semibold text-ink"
             title="Reload all frames from server"
           >
             <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Reload
@@ -624,9 +624,9 @@ export function AdminFramesPanel() {
                 <button
                   type="button"
                   onClick={() => resetSettingsToDefault(f.slug)}
-                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-full bg-cream px-3 py-1.5 text-xs font-semibold text-ink-soft transition hover:text-ink"
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-full bg-cream px-4 py-2 text-xs font-semibold text-ink-soft transition hover:text-ink"
                 >
-                  <RotateCcw className="h-3 w-3" aria-hidden /> Reset to Defaults
+                  <RotateCcw className="h-3.5 w-3.5" aria-hidden /> Reset to Defaults
                 </button>
               </div>
 
@@ -651,7 +651,7 @@ export function AdminFramesPanel() {
 
                 {/* Font Size */}
                 <NumberSelect
-                  label="Font Size"
+                  label="Subtitle Size"
                   value={draft.settings.font_size}
                   onChange={(v) => patchSetting(f.slug, "font_size", v)}
                   options={FONT_SIZE_OPTIONS}
@@ -662,7 +662,7 @@ export function AdminFramesPanel() {
 
                 {/* Line Height */}
                 <NumberSelect
-                  label="Line Height"
+                  label="Subtitle Line Height"
                   value={draft.settings.line_height}
                   onChange={(v) => patchSetting(f.slug, "line_height", v)}
                   options={LINE_HEIGHT_OPTIONS}
@@ -672,7 +672,7 @@ export function AdminFramesPanel() {
 
                 {/* Letter Spacing */}
                 <NumberSelect
-                  label="Letter Spacing"
+                  label="Subtitle Letter Spacing"
                   value={draft.settings.letter_spacing}
                   onChange={(v) => patchSetting(f.slug, "letter_spacing", v)}
                   options={LETTER_SPACING_OPTIONS}
@@ -683,7 +683,7 @@ export function AdminFramesPanel() {
 
                 {/* Text Scale */}
                 <NumberSelect
-                  label="Text Scale"
+                  label="Subtitle Text Scale"
                   value={draft.settings.text_scale}
                   onChange={(v) => patchSetting(f.slug, "text_scale", v)}
                   options={SCALE_OPTIONS}
@@ -694,7 +694,7 @@ export function AdminFramesPanel() {
 
                 {/* Text Opacity */}
                 <NumberSelect
-                  label="Text Opacity"
+                  label="Subtitle Text Opacity"
                   value={draft.settings.text_opacity}
                   onChange={(v) => patchSetting(f.slug, "text_opacity", v)}
                   options={OPACITY_PERCENT_OPTIONS}
@@ -716,7 +716,7 @@ export function AdminFramesPanel() {
 
               <div className="grid gap-4 sm:grid-cols-3">
                 <NumberSelect
-                  label="Text X Position"
+                  label="Subtitle X Position"
                   value={draft.settings.text_x}
                   onChange={(v) => patchSetting(f.slug, "text_x", v)}
                   options={POSITION_X_OPTIONS}
@@ -726,7 +726,7 @@ export function AdminFramesPanel() {
                 />
 
                 <NumberSelect
-                  label="Text Y Position"
+                  label="Subtitle Y Offset"
                   value={draft.settings.text_y}
                   onChange={(v) => patchSetting(f.slug, "text_y", v)}
                   options={POSITION_Y_OPTIONS}
@@ -736,7 +736,7 @@ export function AdminFramesPanel() {
                 />
 
                 <NumberSelect
-                  label="Text Width"
+                  label="Subtitle Box Width"
                   value={draft.settings.text_width}
                   onChange={(v) => patchSetting(f.slug, "text_width", v)}
                   options={WIDTH_PERCENT_OPTIONS}
@@ -904,7 +904,7 @@ export function AdminFramesPanel() {
                 <button
                   type="button"
                   onClick={() => resetSettingsToDefault(f.slug)}
-                  className="text-[11px] font-semibold text-ink-soft underline"
+                  className="flex min-h-[44px] items-center px-3 py-2 text-xs font-semibold text-ink-soft underline hover:text-ink"
                 >
                   Reset
                 </button>

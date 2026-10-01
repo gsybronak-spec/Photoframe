@@ -9,6 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:api": "node scripts/smoke.mjs",
+    "test:mobile": "node scripts/test-mobile-ui.mjs",
     "test:postgres": "node scripts/test-postgres.mjs",
     "test:manifest": "node scripts/audit-cleanup.mjs",
     "make-icons": "node scripts/make-icons.mjs",
@@ -35,6 +36,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
+    "puppeteer-core": "^25.12.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
