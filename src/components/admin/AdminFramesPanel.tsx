@@ -1,18 +1,21 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
   CheckCircle2,
   ExternalLink,
   Filter,
+  Layers,
   Loader2,
   RefreshCw,
   RotateCcw,
   Save,
+  Search,
   Sliders,
   Sparkles,
+  Type,
 } from "lucide-react";
 import {
   buildFrameSVG,
@@ -30,9 +33,11 @@ import {
   LETTER_SPACING_OPTIONS,
   LINE_HEIGHT_OPTIONS,
   NumberSelect,
-  OPACITY_OPTIONS,
-  PERCENT_OPTIONS,
+  OPACITY_PERCENT_OPTIONS,
+  POSITION_X_OPTIONS,
+  POSITION_Y_OPTIONS,
   SCALE_OPTIONS,
+  WIDTH_PERCENT_OPTIONS,
 } from "@/components/ui/NumberSelect";
 
 interface FrameRow {
@@ -61,7 +66,10 @@ interface Draft {
   settings: FrameNumericSettings;
 }
 
+type SaveStatus = "idle" | "changed" | "saving" | "saved" | "error";
+
 const FRAME_FONTS = [
+  "Fraunces",
   "Playfair Display",
   "Plus Jakarta Sans",
   "Cormorant Garamond",
@@ -121,12 +129,14 @@ function settingsEqual(a: FrameNumericSettings, b: FrameNumericSettings): boolea
 }
 
 /**
- * Frame Settings & Metadata Studio.
+ * Mobile-First Frame Settings & Metadata Studio.
  *
  * Guarantees:
- * - Every registered frame (all 24 frames) is always available and selectable, even if no DB override row exists yet.
- * - Selected frame persists across URL (`?frame=<slug>`) and localStorage so page refresh / re-open never loses selection.
- * - Numerical & typography settings accept and persist exact decimal values (`10.1`, `10.5`, `12.75`, `1.5`, `-0.5`, etc.).
+ * 1. Mobile-Optimized Selector: Focuses cleanly on one frame at a time on mobile viewports.
+ * 2. Precision Decimal Controls: Pre-curated presets + custom decimal input with zero key-eating.
+ * 3. Immediate Local Preview: SVG updates in real-time as settings change before saving.
+ * 4. Resilient Mobile Save: Mutex-locked, abort-timeout protected, sticky bottom action bar.
+ * 5. Full 24-Frame Integrity: All 24 frames remain permanently accessible and persistent.
  */
 export function AdminFramesPanel() {
   const [frames, setFrames] = useState<FrameRow[]>(() => buildCodeDefaultRows());
@@ -137,29 +147,35 @@ export function AdminFramesPanel() {
     "Surya Namaskar",
     "Nature & Retreats",
     "Events & Milestones",
+    "General",
   ]);
+
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() =>
     Object.fromEntries(buildCodeDefaultRows().map((f) => [f.slug, toDraft(f)]))
   );
+
   const [selectedSlug, setSelectedSlug] = useState<string>(() => {
-    if (typeof window === "undefined") return "all";
+    if (typeof window === "undefined") return "sunrise-salutation";
     const params = new URLSearchParams(window.location.search);
     const urlFrame = params.get("frame");
     const storedFrame = window.localStorage.getItem("zenframe:selectedFrameSlug");
     const candidate = urlFrame || storedFrame;
-    if (candidate && candidate !== "all") {
-      return resolveFrameSlug(candidate) ?? "all";
+    if (candidate) {
+      if (candidate === "all") return "all";
+      const resolved = resolveFrameSlug(candidate);
+      if (resolved) return resolved;
     }
-    return "all";
+    return "sunrise-salutation";
   });
+
   const [search, setSearch] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [saveStates, setSaveStates] = useState<
-    Record<string, "idle" | "saving" | "saved" | "error">
-  >({});
+  const [saveStates, setSaveStates] = useState<Record<string, SaveStatus>>({});
   const [saveErrors, setSaveErrors] = useState<Record<string, string>>({});
   const [flash, setFlash] = useState("");
+
+  const savingRef = useRef<Record<string, boolean>>({});
 
   const selectFrame = (slugOrAll: string) => {
     const resolved =
@@ -168,13 +184,13 @@ export function AdminFramesPanel() {
     if (typeof window !== "undefined") {
       window.localStorage.setItem("zenframe:selectedFrameSlug", resolved);
       const url = new URL(window.location.href);
-      if (resolved === "all") url.searchParams.delete("frame");
+      if (resolved === "all") url.searchParams.set("frame", "all");
       else url.searchParams.set("frame", resolved);
       window.history.replaceState({}, "", url.toString());
     }
   };
 
-  /** Load all frames from API while merging with the 24-frame code registry so zero frames are ever dropped. */
+  /** Load all frames from API while merging with the 24-frame code registry so zero frames are dropped. */
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/admin/frames", { cache: "no-store" });
@@ -206,27 +222,28 @@ export function AdminFramesPanel() {
         });
       }
 
-      // Always union with all 24 code registry frames so no registered frame can ever disappear
+      // Always merge with all 24 code frames so no registered frame is ever dropped
       const mergedFrames: FrameRow[] = buildCodeDefaultRows().map(
         (codeFrame) => apiBySlug.get(codeFrame.slug) ?? codeFrame
       );
 
       setFrames(mergedFrames);
       if (Array.isArray(data.categories) && data.categories.length > 0) {
-        setCategories(data.categories);
+        setCategories(Array.from(new Set([...categories, ...data.categories])));
       }
       setDrafts(Object.fromEntries(mergedFrames.map((f) => [f.slug, toDraft(f)])));
     } catch {
-      setError("Network trouble — check your connection and try again.");
+      setError("Network trouble — check your connection and tap Reload.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [categories]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
-  }, [load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const patch = (slug: string, changes: Partial<Draft>) => {
     setDrafts((prev) => {
@@ -234,11 +251,10 @@ export function AdminFramesPanel() {
       if (!current) return prev;
       return { ...prev, [slug]: { ...current, ...changes } };
     });
-    setSaveStates((prev) =>
-      prev[slug] === "saved" || prev[slug] === "error"
-        ? { ...prev, [slug]: "idle" }
-        : prev
-    );
+    setSaveStates((prev) => ({ ...prev, [slug]: "changed" }));
+    if (saveErrors[slug]) {
+      setSaveErrors((prev) => ({ ...prev, [slug]: "" }));
+    }
   };
 
   const patchSetting = <K extends keyof FrameNumericSettings>(
@@ -260,11 +276,10 @@ export function AdminFramesPanel() {
         },
       };
     });
-    setSaveStates((prev) =>
-      prev[slug] === "saved" || prev[slug] === "error"
-        ? { ...prev, [slug]: "idle" }
-        : prev
-    );
+    setSaveStates((prev) => ({ ...prev, [slug]: "changed" }));
+    if (saveErrors[slug]) {
+      setSaveErrors((prev) => ({ ...prev, [slug]: "" }));
+    }
   };
 
   const resetSettingsToDefault = (slug: string) => {
@@ -273,15 +288,23 @@ export function AdminFramesPanel() {
 
   const save = async (slug: string) => {
     const draft = drafts[slug];
-    if (!draft || saveStates[slug] === "saving") return;
+    if (!draft) return;
+    if (savingRef.current[slug]) return; // mutex lock
+
+    savingRef.current[slug] = true;
     setSaveStates((prev) => ({ ...prev, [slug]: "saving" }));
     setSaveErrors((prev) => ({ ...prev, [slug]: "" }));
     setError("");
     setFlash("");
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 15000);
+
     try {
       const res = await fetch(`/api/admin/frames/${slug}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           description: draft.description,
           category: draft.category,
@@ -291,12 +314,13 @@ export function AdminFramesPanel() {
           settings: draft.settings,
         }),
       });
-      const data = await res.json();
+      window.clearTimeout(timeoutId);
+
+      const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
-        const msg = data.error ?? "Could not save that frame.";
+        const msg = data.error ?? "Could not save settings. Please retry.";
         setSaveStates((prev) => ({ ...prev, [slug]: "error" }));
         setSaveErrors((prev) => ({ ...prev, [slug]: msg }));
-        setError(msg);
         return;
       }
 
@@ -318,6 +342,7 @@ export function AdminFramesPanel() {
             : f
         )
       );
+
       setDrafts((prev) => ({
         ...prev,
         [slug]: {
@@ -331,13 +356,23 @@ export function AdminFramesPanel() {
           settings: normalizedSettings,
         },
       }));
+
       setSaveStates((prev) => ({ ...prev, [slug]: "saved" }));
-      setFlash(`Saved “${data.frame.title ?? slug}” settings.`);
-    } catch {
-      const msg = "Network trouble — check your connection and try again.";
+      setFlash(`Saved “${data.frame.title ?? slug}” settings ✓`);
+
+      window.setTimeout(() => {
+        setSaveStates((prev) => (prev[slug] === "saved" ? { ...prev, [slug]: "idle" } : prev));
+      }, 3500);
+    } catch (err) {
+      window.clearTimeout(timeoutId);
+      const isAbort = err instanceof Error && err.name === "AbortError";
+      const msg = isAbort
+        ? "Save request timed out. Please check your connection and tap Retry."
+        : "Network trouble — unable to save settings. Please tap Retry.";
       setSaveStates((prev) => ({ ...prev, [slug]: "error" }));
       setSaveErrors((prev) => ({ ...prev, [slug]: msg }));
-      setError(msg);
+    } finally {
+      savingRef.current[slug] = false;
     }
   };
 
@@ -358,111 +393,118 @@ export function AdminFramesPanel() {
 
   if (loading) {
     return (
-      <p
-        className="glass flex items-center gap-2 rounded-[2rem] p-8 text-sm text-ink-soft"
-        role="status"
-      >
-        <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Loading frames…
-      </p>
+      <div className="glass flex items-center justify-center gap-3 rounded-[2rem] p-12 text-sm font-semibold text-ink-soft">
+        <Loader2 className="h-5 w-5 animate-spin text-coral" aria-hidden /> Loading frame registry…
+      </div>
     );
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6 pb-28 sm:pb-8">
+      {/* Top Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="flex items-center gap-2 font-display text-2xl font-semibold text-ink">
-            <Sparkles className="h-5 w-5 text-saffron-deep" aria-hidden /> Frame Settings ({frames.length})
+          <h2 className="flex items-center gap-2 font-display text-2xl font-bold text-ink sm:text-3xl">
+            <Sparkles className="h-6 w-6 text-saffron-deep" aria-hidden /> Frame Settings
           </h2>
-          <p className="text-xs text-ink-soft">
-            Configure metadata, decimal typography, and layout defaults for all {frames.length} registered frames.
+          <p className="mt-1 text-xs text-ink-soft sm:text-sm">
+            Configure typography, precise decimal positions, and metadata across all {frames.length} frames.
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-xs text-ink-soft">
-            {frames.length} registered · {frames.filter((f) => f.overridden).length} customised
+        <div className="flex items-center gap-2">
+          <span className="rounded-full bg-sand px-3 py-1 font-mono text-xs font-semibold text-ink-soft">
+            {frames.length} registered
           </span>
           <button
             onClick={() => {
               setLoading(true);
               void load();
             }}
-            className="btn-ghost flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold text-ink"
+            className="btn-ghost flex items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-semibold text-ink"
+            title="Reload all frames from server"
           >
             <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Reload
           </button>
         </div>
       </div>
 
-      {/* Persistent Frame Selector & Search Bar */}
-      <div className="glass grid gap-3 rounded-3xl p-4 sm:grid-cols-12 sm:items-end">
-        <div className="sm:col-span-6">
-          <label
-            htmlFor="admin-frame-selector"
-            className="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-ink-soft"
-          >
-            <Filter className="h-3.5 w-3.5 text-coral" aria-hidden /> Select Frame ({frames.length} available)
-          </label>
-          <select
-            id="admin-frame-selector"
-            value={selectedSlug}
-            onChange={(e) => selectFrame(e.target.value)}
-            className="w-full rounded-2xl border border-amber-900/15 bg-white px-4 py-2.5 text-sm font-semibold text-ink outline-none transition focus:border-coral"
-          >
-            <option value="all">Show all {frames.length} frames</option>
-            {frames.map((f, idx) => (
-              <option key={f.slug} value={f.slug}>
-                {idx + 1}. {f.title} ({f.slug}) {!f.active ? "[Hidden]" : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="sm:col-span-4">
-          <label
-            htmlFor="admin-frame-search"
-            className="mb-1 block text-xs font-semibold uppercase tracking-wide text-ink-soft"
-          >
-            Quick Search
-          </label>
-          <input
-            id="admin-frame-search"
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by title, slug, ID, or tag…"
-            className="w-full rounded-2xl border border-amber-900/15 bg-white px-4 py-2.5 text-sm text-ink outline-none transition focus:border-coral"
-          />
-        </div>
-        <div className="sm:col-span-2">
-          <button
-            type="button"
-            onClick={() => {
-              selectFrame("all");
-              setSearch("");
-            }}
-            className="btn-ghost w-full rounded-2xl px-3 py-2.5 text-xs font-semibold text-ink"
-          >
-            Show All ({frames.length})
-          </button>
+      {/* Frame Selector Bar (Mobile-First Touch Dropdown + Quick Search) */}
+      <div className="glass rounded-3xl p-4 sm:p-5">
+        <div className="grid gap-3 sm:grid-cols-12 sm:items-end">
+          <div className="sm:col-span-7">
+            <label
+              htmlFor="admin-frame-selector"
+              className="mb-1.5 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ink-soft"
+            >
+              <Filter className="h-3.5 w-3.5 text-coral" aria-hidden /> Active Frame ({frames.length} Total)
+            </label>
+            <select
+              id="admin-frame-selector"
+              value={selectedSlug}
+              onChange={(e) => selectFrame(e.target.value)}
+              className="w-full rounded-2xl border border-amber-900/15 bg-white px-4 py-3 text-sm font-bold text-ink shadow-sm transition hover:border-coral focus:border-coral focus:ring-2 focus:ring-coral/20 focus:outline-none"
+            >
+              {frames.map((f, idx) => (
+                <option key={f.slug} value={f.slug}>
+                  {idx + 1}. {f.title} ({f.occasion}) {!f.active ? "[Hidden]" : ""}
+                </option>
+              ))}
+              <option value="all">── Show all {frames.length} frames (Grid view) ──</option>
+            </select>
+          </div>
+
+          <div className="sm:col-span-5">
+            <label
+              htmlFor="admin-frame-search"
+              className="mb-1.5 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ink-soft"
+            >
+              <Search className="h-3.5 w-3.5 text-teal" aria-hidden /> Search by name / tag
+            </label>
+            <input
+              id="admin-frame-search"
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search frames…"
+              className="w-full rounded-2xl border border-amber-900/15 bg-white px-4 py-3 text-sm font-medium text-ink shadow-sm focus:border-coral focus:ring-2 focus:ring-coral/20 focus:outline-none"
+            />
+          </div>
         </div>
       </div>
 
       {flash && (
-        <p role="status" className="flex items-center gap-2 text-xs font-semibold text-jade-deep">
-          <CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> {flash}
-        </p>
+        <div role="status" className="flex items-center gap-2 rounded-2xl bg-jade/15 px-4 py-3 text-sm font-bold text-jade-deep">
+          <CheckCircle2 className="h-4 w-4 shrink-0" aria-hidden /> {flash}
+        </div>
       )}
       {error && (
-        <p role="alert" className="flex items-start gap-2 rounded-2xl bg-coral/10 px-4 py-3 text-sm text-coral">
+        <div role="alert" className="flex items-start gap-2 rounded-2xl bg-coral/10 px-4 py-3 text-sm font-bold text-coral">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden /> {error}
-        </p>
+        </div>
       )}
 
+      {visibleFrames.length === 0 && (
+        <div className="glass rounded-3xl p-8 text-center text-sm font-semibold text-ink-soft">
+          No frames match your search.{" "}
+          <button
+            type="button"
+            onClick={() => {
+              setSearch("");
+              selectFrame("all");
+            }}
+            className="text-coral underline"
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
+
+      {/* Frame Settings Cards */}
       {visibleFrames.map((f) => {
         const draft = drafts[f.slug] ?? toDraft(f);
         const state = saveStates[f.slug] ?? "idle";
         const rowErr = saveErrors[f.slug];
-        const changed =
+        const isChanged =
           draft.description !== f.description ||
           draft.category !== f.category ||
           draft.tags !== f.tags.join(", ") ||
@@ -479,50 +521,43 @@ export function AdminFramesPanel() {
           <section
             key={f.slug}
             id={`frame-card-${f.slug}`}
-            className="glass rounded-3xl p-5 sm:p-6"
+            className="glass space-y-6 rounded-[2rem] p-5 sm:p-7 shadow-glass"
             aria-labelledby={`frame-${f.slug}`}
           >
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="flex items-start gap-4">
-                {previewUri && (
+            {/* Header & Meta Badges */}
+            <div className="flex flex-wrap items-start justify-between gap-4 border-b border-amber-900/10 pb-5">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 id={`frame-${f.slug}`} className="font-display text-2xl font-bold text-ink">
+                    {f.title}
+                  </h3>
                   <Link
                     href={`/frames/${f.slug}`}
-                    className="group relative block h-28 w-22 shrink-0 overflow-hidden rounded-2xl border border-amber-900/15 bg-cream shadow-sm transition hover:scale-[1.02]"
-                    title={`Open ${f.title} in editor`}
+                    target="_blank"
+                    className="inline-flex items-center gap-1 rounded-full bg-cream px-3 py-1 text-xs font-bold text-teal-deep hover:text-coral"
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={previewUri}
-                      alt={`${f.title} frame artwork`}
-                      className="h-full w-full object-cover"
-                    />
+                    Open Editor <ExternalLink className="h-3 w-3" aria-hidden />
                   </Link>
-                )}
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 id={`frame-${f.slug}`} className="font-display text-xl font-semibold text-ink">
-                      {f.title}
-                    </h3>
-                    <Link
-                      href={`/frames/${f.slug}`}
-                      className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-0.5 text-[11px] font-semibold text-teal-deep hover:text-coral"
-                    >
-                      Open in Editor <ExternalLink className="h-3 w-3" aria-hidden />
-                    </Link>
-                  </div>
-                  <p className="mt-0.5 text-xs text-ink-soft">
-                    Slug: <code className="font-mono font-semibold text-ink">/{f.slug}</code> · ID:{" "}
-                    <code className="font-mono text-ink-soft">{f.id}</code> · {f.occasion} · art: {f.art}
-                    {f.overridden && (
-                      <span className="ml-2 rounded-full bg-saffron/15 px-2 py-0.5 font-semibold text-saffron-deep">
-                        customised
-                      </span>
-                    )}
-                  </p>
                 </div>
+                <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-ink-soft">
+                  <span>
+                    Slug: <code className="font-mono font-bold text-ink">/{f.slug}</code>
+                  </span>
+                  <span>·</span>
+                  <span>Category: {f.occasion}</span>
+                  <span>·</span>
+                  <span>Art: {f.art}</span>
+                  {f.overridden && (
+                    <span className="rounded-full bg-saffron/15 px-2 py-0.5 text-[10px] font-bold text-saffron-deep">
+                      Customized
+                    </span>
+                  )}
+                </p>
               </div>
-              <div className="flex items-center gap-4">
-                <label className="flex items-center gap-2 text-xs font-semibold text-ink">
+
+              {/* Active & Featured Checkboxes (Large 44px Touch Targets) */}
+              <div className="flex items-center gap-3">
+                <label className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl bg-sand/60 px-3 py-2 text-xs font-bold text-ink transition hover:bg-sand">
                   <input
                     type="checkbox"
                     checked={draft.featured}
@@ -531,7 +566,7 @@ export function AdminFramesPanel() {
                   />
                   Featured
                 </label>
-                <label className="flex items-center gap-2 text-xs font-semibold text-ink">
+                <label className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl bg-sand/60 px-3 py-2 text-xs font-bold text-ink transition hover:bg-sand">
                   <input
                     type="checkbox"
                     checked={draft.active}
@@ -543,70 +578,68 @@ export function AdminFramesPanel() {
               </div>
             </div>
 
-            <div className="mt-4 grid gap-4 sm:grid-cols-2">
-              <label className="block sm:col-span-2">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-ink-soft">
-                  Description (SEO &amp; social)
-                </span>
-                <textarea
-                  rows={2}
-                  value={draft.description}
-                  onChange={(e) => patch(f.slug, { description: e.target.value.slice(0, 320) })}
-                  className="w-full resize-y rounded-2xl border border-white/70 bg-white/60 px-4 py-3 text-sm text-ink outline-none transition focus:border-saffron focus:bg-white/80"
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-ink-soft">
-                  Category
-                </span>
-                <select
-                  value={draft.category}
-                  onChange={(e) => patch(f.slug, { category: e.target.value })}
-                  className="w-full rounded-2xl border border-white/70 bg-white/60 px-4 py-3 text-sm text-ink outline-none transition focus:border-saffron"
-                >
-                  {categories.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-ink-soft">
-                  Tags (comma separated)
-                </span>
-                <input
-                  value={draft.tags}
-                  onChange={(e) => patch(f.slug, { tags: e.target.value })}
-                  className="w-full rounded-2xl border border-white/70 bg-white/60 px-4 py-3 text-sm text-ink outline-none transition focus:border-saffron focus:bg-white/80"
-                />
-              </label>
+            {/* Live Interactive Artwork Preview */}
+            <div className="flex flex-col items-center gap-3 rounded-2xl border border-amber-900/10 bg-sand/40 p-4 sm:flex-row sm:items-start">
+              {previewUri && (
+                <div className="relative h-44 w-36 shrink-0 overflow-hidden rounded-2xl border-2 border-amber-900/15 bg-cream shadow-md transition sm:h-52 sm:w-42">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={previewUri}
+                    alt={`${f.title} Live Artwork Preview`}
+                    className="h-full w-full object-cover"
+                  />
+                  <div className="pointer-events-none absolute bottom-1.5 left-1/2 -translate-x-1/2 rounded-full bg-ink/75 px-2 py-0.5 text-[9px] font-bold text-white shadow">
+                    Live Preview
+                  </div>
+                </div>
+              )}
+              <div className="flex-1 text-center sm:text-left">
+                <h4 className="font-display text-base font-bold text-ink">Interactive Real-Time Preview</h4>
+                <p className="mt-1 text-xs text-ink-soft">
+                  Changes to typography, decimal size, opacity, and positioning reflect immediately on this preview. Press <strong>Save Settings</strong> below to persist to the database.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-mono text-ink-soft">
+                  <span className="rounded-lg bg-white px-2 py-1 shadow-sm">
+                    Font: {draft.settings.font_family}
+                  </span>
+                  <span className="rounded-lg bg-white px-2 py-1 shadow-sm">
+                    Size: {draft.settings.font_size}px
+                  </span>
+                  <span className="rounded-lg bg-white px-2 py-1 shadow-sm">
+                    Line Height: {draft.settings.line_height}
+                  </span>
+                  <span className="rounded-lg bg-white px-2 py-1 shadow-sm">
+                    Opacity: {Math.round(draft.settings.text_opacity * 100)}%
+                  </span>
+                </div>
+              </div>
             </div>
 
-            {/* Numerical & Typography Settings (Supports Decimal Values + Dropdown Presets) */}
-            <div className="mt-5 rounded-2xl border border-amber-900/10 bg-white/65 p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-ink">
-                  <Sliders className="h-3.5 w-3.5 text-coral" aria-hidden /> Typography &amp; Numerical Settings (Decimal Precision)
+            {/* Section 1: Typography Settings (Decimal Safe) */}
+            <div className="rounded-2xl border border-amber-900/10 bg-white/70 p-4 sm:p-5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-amber-900/10 pb-3">
+                <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ink">
+                  <Type className="h-4 w-4 text-coral" aria-hidden /> Typography Settings (Dropdowns + Decimal Safe)
                 </span>
                 <button
                   type="button"
                   onClick={() => resetSettingsToDefault(f.slug)}
-                  className="inline-flex items-center gap-1 rounded-full bg-cream px-2.5 py-1 text-[11px] font-semibold text-ink-soft hover:text-ink"
+                  className="inline-flex min-h-[36px] items-center gap-1.5 rounded-full bg-cream px-3 py-1.5 text-xs font-semibold text-ink-soft transition hover:text-ink"
                 >
-                  <RotateCcw className="h-3 w-3" aria-hidden /> Reset defaults
+                  <RotateCcw className="h-3 w-3" aria-hidden /> Reset to Defaults
                 </button>
               </div>
 
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <label className="block">
-                  <span className="mb-1 block text-[11px] font-semibold text-ink-soft">
-                    Font family
-                  </span>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {/* Font Family Dropdown */}
+                <div className="block w-full">
+                  <label className="mb-1.5 block text-xs font-semibold text-ink-soft">
+                    Font Family
+                  </label>
                   <select
                     value={draft.settings.font_family}
                     onChange={(e) => patchSetting(f.slug, "font_family", e.target.value)}
-                    className="w-full rounded-xl border border-amber-900/15 bg-white px-2.5 py-1.5 text-xs font-medium text-ink focus:border-coral focus:outline-none"
+                    className="w-full min-h-[44px] rounded-2xl border border-amber-900/15 bg-white px-3.5 py-2.5 text-sm font-semibold text-ink shadow-sm transition hover:border-coral focus:border-coral focus:ring-2 focus:ring-coral/20 focus:outline-none"
                   >
                     {FRAME_FONTS.map((font) => (
                       <option key={font} value={font}>
@@ -614,10 +647,11 @@ export function AdminFramesPanel() {
                       </option>
                     ))}
                   </select>
-                </label>
+                </div>
 
+                {/* Font Size */}
                 <NumberSelect
-                  label="Font size"
+                  label="Font Size"
                   value={draft.settings.font_size}
                   onChange={(v) => patchSetting(f.slug, "font_size", v)}
                   options={FONT_SIZE_OPTIONS}
@@ -626,8 +660,9 @@ export function AdminFramesPanel() {
                   unit="px"
                 />
 
+                {/* Line Height */}
                 <NumberSelect
-                  label="Line height"
+                  label="Line Height"
                   value={draft.settings.line_height}
                   onChange={(v) => patchSetting(f.slug, "line_height", v)}
                   options={LINE_HEIGHT_OPTIONS}
@@ -635,8 +670,9 @@ export function AdminFramesPanel() {
                   max={4}
                 />
 
+                {/* Letter Spacing */}
                 <NumberSelect
-                  label="Letter spacing"
+                  label="Letter Spacing"
                   value={draft.settings.letter_spacing}
                   onChange={(v) => patchSetting(f.slug, "letter_spacing", v)}
                   options={LETTER_SPACING_OPTIONS}
@@ -645,8 +681,9 @@ export function AdminFramesPanel() {
                   unit="px"
                 />
 
+                {/* Text Scale */}
                 <NumberSelect
-                  label="Text scale"
+                  label="Text Scale"
                   value={draft.settings.text_scale}
                   onChange={(v) => patchSetting(f.slug, "text_scale", v)}
                   options={SCALE_OPTIONS}
@@ -655,47 +692,72 @@ export function AdminFramesPanel() {
                   unit="×"
                 />
 
+                {/* Text Opacity */}
                 <NumberSelect
-                  label="Text X position"
+                  label="Text Opacity"
+                  value={draft.settings.text_opacity}
+                  onChange={(v) => patchSetting(f.slug, "text_opacity", v)}
+                  options={OPACITY_PERCENT_OPTIONS}
+                  min={0}
+                  max={1}
+                  unit="%"
+                  displayAsPercentage={true}
+                />
+              </div>
+            </div>
+
+            {/* Section 2: Position & Dimensions */}
+            <div className="rounded-2xl border border-amber-900/10 bg-white/70 p-4 sm:p-5">
+              <div className="mb-4 border-b border-amber-900/10 pb-3">
+                <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ink">
+                  <Sliders className="h-4 w-4 text-teal" aria-hidden /> Position &amp; Layout (% of Canvas)
+                </span>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-3">
+                <NumberSelect
+                  label="Text X Position"
                   value={draft.settings.text_x}
                   onChange={(v) => patchSetting(f.slug, "text_x", v)}
-                  options={PERCENT_OPTIONS}
+                  options={POSITION_X_OPTIONS}
                   min={0}
                   max={100}
                   unit="%"
                 />
 
                 <NumberSelect
-                  label="Text Y position"
+                  label="Text Y Position"
                   value={draft.settings.text_y}
                   onChange={(v) => patchSetting(f.slug, "text_y", v)}
-                  options={PERCENT_OPTIONS}
+                  options={POSITION_Y_OPTIONS}
                   min={0}
                   max={100}
                   unit="%"
                 />
 
                 <NumberSelect
-                  label="Text width"
+                  label="Text Width"
                   value={draft.settings.text_width}
                   onChange={(v) => patchSetting(f.slug, "text_width", v)}
-                  options={PERCENT_OPTIONS}
+                  options={WIDTH_PERCENT_OPTIONS}
                   min={10}
                   max={100}
                   unit="%"
                 />
+              </div>
+            </div>
 
-                <NumberSelect
-                  label="Text opacity"
-                  value={draft.settings.text_opacity}
-                  onChange={(v) => patchSetting(f.slug, "text_opacity", v)}
-                  options={OPACITY_OPTIONS}
-                  min={0}
-                  max={1}
-                />
+            {/* Section 3: Photo & Frame Styling */}
+            <div className="rounded-2xl border border-amber-900/10 bg-white/70 p-4 sm:p-5">
+              <div className="mb-4 border-b border-amber-900/10 pb-3">
+                <span className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-ink">
+                  <Layers className="h-4 w-4 text-saffron-deep" aria-hidden /> Photo &amp; Border Styling
+                </span>
+              </div>
 
+              <div className="grid gap-4 sm:grid-cols-2">
                 <NumberSelect
-                  label="Photo scale"
+                  label="Photo Scale"
                   value={draft.settings.photo_scale}
                   onChange={(v) => patchSetting(f.slug, "photo_scale", v)}
                   options={SCALE_OPTIONS}
@@ -705,57 +767,175 @@ export function AdminFramesPanel() {
                 />
 
                 <NumberSelect
-                  label="Border opacity"
+                  label="Border Opacity"
                   value={draft.settings.border_opacity}
                   onChange={(v) => patchSetting(f.slug, "border_opacity", v)}
-                  options={OPACITY_OPTIONS}
+                  options={OPACITY_PERCENT_OPTIONS}
                   min={0}
                   max={1}
+                  unit="%"
+                  displayAsPercentage={true}
                 />
               </div>
             </div>
 
+            {/* Section 4: Metadata & SEO */}
+            <div className="rounded-2xl border border-amber-900/10 bg-white/70 p-4 sm:p-5">
+              <div className="mb-4 border-b border-amber-900/10 pb-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-ink">
+                  Metadata &amp; Search Tags
+                </span>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="block sm:col-span-2">
+                  <span className="mb-1.5 block text-xs font-semibold text-ink-soft">
+                    Description (SEO &amp; Social sharing)
+                  </span>
+                  <textarea
+                    rows={2}
+                    value={draft.description}
+                    onChange={(e) => patch(f.slug, { description: e.target.value.slice(0, 320) })}
+                    className="w-full resize-y rounded-2xl border border-amber-900/15 bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-coral"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-semibold text-ink-soft">
+                    Category
+                  </span>
+                  <select
+                    value={draft.category}
+                    onChange={(e) => patch(f.slug, { category: e.target.value })}
+                    className="w-full min-h-[44px] rounded-2xl border border-amber-900/15 bg-white px-4 py-2.5 text-sm font-semibold text-ink outline-none transition focus:border-coral"
+                  >
+                    {categories.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block">
+                  <span className="mb-1.5 block text-xs font-semibold text-ink-soft">
+                    Tags (comma separated)
+                  </span>
+                  <input
+                    value={draft.tags}
+                    onChange={(e) => patch(f.slug, { tags: e.target.value })}
+                    className="w-full min-h-[44px] rounded-2xl border border-amber-900/15 bg-white px-4 py-2.5 text-sm font-medium text-ink outline-none transition focus:border-coral"
+                  />
+                </label>
+              </div>
+            </div>
+
             {rowErr && (
-              <p role="alert" className="mt-3 flex items-center gap-2 text-xs font-semibold text-coral">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" aria-hidden /> {rowErr}
-              </p>
+              <div role="alert" className="flex items-center gap-2 rounded-2xl bg-coral/10 p-3.5 text-xs font-bold text-coral">
+                <AlertCircle className="h-4 w-4 shrink-0" aria-hidden /> {rowErr}
+              </div>
             )}
 
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={() => void save(f.slug)}
-                disabled={state === "saving" || (!changed && state !== "error")}
-                className="btn-primary flex items-center gap-2 rounded-2xl px-5 py-2.5 text-sm font-semibold disabled:opacity-40"
-              >
-                {state === "saving" ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Saving…
-                  </>
-                ) : state === "saved" && !changed ? (
-                  <>
-                    <CheckCircle2 className="h-4 w-4" aria-hidden /> Saved ✓
-                  </>
-                ) : state === "error" ? (
-                  <>
-                    <AlertCircle className="h-4 w-4" aria-hidden /> Save failed
-                  </>
-                ) : (
-                  <>
-                    <Save className="h-4 w-4" aria-hidden /> {changed ? "Save" : "Saved ✓"}
-                  </>
+            {/* Desktop Action Row */}
+            <div className="hidden sm:flex sm:items-center sm:justify-between sm:pt-2">
+              <div className="flex items-center gap-2">
+                {isChanged && state !== "saved" && state !== "saving" && (
+                  <span className="flex items-center gap-1.5 rounded-full bg-saffron/15 px-3 py-1 text-xs font-bold text-saffron-deep">
+                    <span className="h-2 w-2 rounded-full bg-saffron animate-pulse" /> Unsaved changes
+                  </span>
                 )}
-              </button>
+                {state === "saved" && (
+                  <span className="flex items-center gap-1.5 rounded-full bg-jade/15 px-3 py-1 text-xs font-bold text-jade-deep">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> All settings saved
+                  </span>
+                )}
+              </div>
 
-              {state === "error" && (
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => resetSettingsToDefault(f.slug)}
+                  className="btn-ghost rounded-2xl px-4 py-2.5 text-xs font-bold text-ink-soft hover:text-ink"
+                >
+                  Reset Defaults
+                </button>
+
                 <button
                   type="button"
                   onClick={() => void save(f.slug)}
-                  className="btn-ghost flex items-center gap-1.5 rounded-2xl border border-coral/30 px-4 py-2.5 text-xs font-semibold text-coral"
+                  disabled={state === "saving"}
+                  className="flex min-h-[44px] items-center gap-2 rounded-2xl bg-gradient-to-r from-saffron to-coral px-6 py-2.5 text-sm font-bold text-white shadow-md transition active:scale-95 disabled:opacity-50"
                 >
-                  <RefreshCw className="h-3.5 w-3.5" aria-hidden /> Retry
+                  {state === "saving" ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Saving…
+                    </>
+                  ) : state === "saved" ? (
+                    <>
+                      <CheckCircle2 className="h-4 w-4" aria-hidden /> Saved ✓
+                    </>
+                  ) : state === "error" ? (
+                    <>
+                      <AlertCircle className="h-4 w-4" aria-hidden /> Retry Save
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-4 w-4" aria-hidden /> Save Settings
+                    </>
+                  )}
                 </button>
-              )}
+              </div>
+            </div>
+
+            {/* Sticky Mobile Action Bar (Always Visible While Scrolling on Small Screens) */}
+            <div className="fixed bottom-0 inset-x-0 z-30 flex items-center justify-between border-t border-amber-900/10 bg-white/95 px-4 py-3 shadow-lg backdrop-blur-md sm:hidden">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-ink">
+                  {isChanged ? (
+                    <span className="flex items-center gap-1 text-saffron-deep">
+                      <span className="h-2 w-2 rounded-full bg-saffron animate-pulse" /> Modified
+                    </span>
+                  ) : state === "saved" ? (
+                    <span className="flex items-center gap-1 text-jade-deep">✓ Saved</span>
+                  ) : (
+                    <span className="text-ink-soft">Ready</span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => resetSettingsToDefault(f.slug)}
+                  className="text-[11px] font-semibold text-ink-soft underline"
+                >
+                  Reset
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void save(f.slug)}
+                  disabled={state === "saving"}
+                  className="flex min-h-[44px] items-center gap-1.5 rounded-xl bg-gradient-to-r from-saffron to-coral px-5 py-2.5 text-xs font-extrabold text-white shadow-md transition active:scale-95 disabled:opacity-50"
+                >
+                  {state === "saving" ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> Saving…
+                    </>
+                  ) : state === "error" ? (
+                    <>
+                      <AlertCircle className="h-3.5 w-3.5" aria-hidden /> Tap to Retry
+                    </>
+                  ) : state === "saved" ? (
+                    <>
+                      <CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> Saved ✓
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-3.5 w-3.5" aria-hidden /> Save Settings
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </section>
         );

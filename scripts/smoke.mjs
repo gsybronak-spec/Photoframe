@@ -1101,6 +1101,52 @@ async function run() {
     eq(restore.status, 200, "restore active status");
   });
 
+  await check("independent frame settings persistence across multiple frames without cross-contamination", async () => {
+    useJar(adminJar);
+    // Frame A: international-yoga-day -> 10.1, 1.25, 0.5, 0.95
+    const patchA = await req("/api/admin/frames/international-yoga-day", {
+      method: "PATCH",
+      body: {
+        settings: {
+          font_size: 10.1,
+          line_height: 1.25,
+          letter_spacing: 0.5,
+          text_opacity: 0.95,
+        },
+      },
+    });
+    eq(patchA.status, 200, "patch frame A status");
+
+    // Frame B: sunrise-salutation -> 12.5, 1.35, 1.25, 0.75
+    const patchB = await req("/api/admin/frames/sunrise-salutation", {
+      method: "PATCH",
+      body: {
+        settings: {
+          font_size: 12.5,
+          line_height: 1.35,
+          letter_spacing: 1.25,
+          text_opacity: 0.75,
+        },
+      },
+    });
+    eq(patchB.status, 200, "patch frame B status");
+
+    // Re-fetch Frame A and Frame B independently
+    const getA = await req("/api/frames/international-yoga-day/settings");
+    eq(getA.status, 200, "get frame A settings");
+    eq(getA.json.frame?.settings?.font_size, 10.1, "frame A font_size must be 10.1");
+    eq(getA.json.frame?.settings?.line_height, 1.25, "frame A line_height must be 1.25");
+    eq(getA.json.frame?.settings?.letter_spacing, 0.5, "frame A letter_spacing must be 0.5");
+    eq(getA.json.frame?.settings?.text_opacity, 0.95, "frame A text_opacity must be 0.95");
+
+    const getB = await req("/api/frames/sunrise-salutation/settings");
+    eq(getB.status, 200, "get frame B settings");
+    eq(getB.json.frame?.settings?.font_size, 12.5, "frame B font_size must be 12.5");
+    eq(getB.json.frame?.settings?.line_height, 1.35, "frame B line_height must be 1.35");
+    eq(getB.json.frame?.settings?.letter_spacing, 1.25, "frame B letter_spacing must be 1.25");
+    eq(getB.json.frame?.settings?.text_opacity, 0.75, "frame B text_opacity must be 0.75");
+  });
+
   await check("POST /api/creations accepts alias slug and canonicalizes to frame.slug", async () => {
     useJar(adminJar);
     const res = await req("/api/creations", {

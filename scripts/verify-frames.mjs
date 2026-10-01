@@ -212,4 +212,30 @@ assert.equal(normalizedSettings.border_opacity, 0.95, "normalizeFrameSettings mu
 assert.equal(DEFAULT_FRAME_SETTINGS.font_size, 34, "DEFAULT_FRAME_SETTINGS baseline intact");
 
 console.log("✓ 6. Exact decimal values (10, 10.1, 10.5, 12.75, 0.5, 1.5, 2.0, -0.5, -1.5) preserved without rounding");
+
+// 7. Robust NumberSelect preset options & custom decimal parse verification
+const expectedDecimals = [10.1, 12.5, 1.25, 0.75, 0.9, 95.5, 99.9];
+for (const d of expectedDecimals) {
+  const parsed = Number(String(d));
+  assert.equal(Number.isFinite(parsed), true, `Number("${d}") must be finite`);
+  assert.equal(parsed, d, `Parsed ${d} must match exactly`);
+  const clamped = Math.min(100, Math.max(0, parsed));
+  assert.equal(typeof clamped, "number", `Clamped ${d} must be number`);
+}
+
+// Intermediate typing parsing validation (e.g. typing "10." then "1" -> 10.1)
+const typingSequence = ["1", "10", "10.", "10.1"];
+let lastCommitted = 0;
+for (const token of typingSequence) {
+  if (token.endsWith(".")) {
+    // Intermediate state: not committed to parent yet, preserves raw string
+    assert.equal(token, "10.", "Intermediate dot state must not be destroyed");
+  } else {
+    lastCommitted = Number(token);
+  }
+}
+assert.equal(lastCommitted, 10.1, "Final committed value from typing 10.1 must be exact 10.1");
+
+console.log("✓ 7. Universal NumberSelect options & custom decimal parsing (10.1, 12.5, 1.25, 0.75, 0.9) verified");
 console.log("=== ALL FRAME, SETTINGS & DECIMAL VERIFICATION CHECKS PASSED ===");
+

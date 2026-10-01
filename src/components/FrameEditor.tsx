@@ -37,9 +37,11 @@ import {
   LETTER_SPACING_OPTIONS,
   LINE_HEIGHT_OPTIONS,
   NumberSelect,
-  OPACITY_OPTIONS,
-  PERCENT_OPTIONS,
+  OPACITY_PERCENT_OPTIONS,
+  POSITION_X_OPTIONS,
+  POSITION_Y_OPTIONS,
   SCALE_OPTIONS,
+  WIDTH_PERCENT_OPTIONS,
 } from "@/components/ui/NumberSelect";
 import { useAuth } from "@/components/AuthProvider";
 import { trackClient } from "@/lib/analytics-client";
@@ -1084,7 +1086,7 @@ export function FrameEditor({
                   label="Text X"
                   value={frameSettings.text_x}
                   onChange={(v) => updateSetting("text_x", v)}
-                  options={PERCENT_OPTIONS}
+                  options={POSITION_X_OPTIONS}
                   min={0}
                   max={100}
                   unit="%"
@@ -1094,7 +1096,7 @@ export function FrameEditor({
                   label="Text Y"
                   value={frameSettings.text_y}
                   onChange={(v) => updateSetting("text_y", v)}
-                  options={PERCENT_OPTIONS}
+                  options={POSITION_Y_OPTIONS}
                   min={0}
                   max={100}
                   unit="%"
@@ -1104,7 +1106,7 @@ export function FrameEditor({
                   label="Text width"
                   value={frameSettings.text_width}
                   onChange={(v) => updateSetting("text_width", v)}
-                  options={PERCENT_OPTIONS}
+                  options={WIDTH_PERCENT_OPTIONS}
                   min={10}
                   max={100}
                   unit="%"
@@ -1114,9 +1116,11 @@ export function FrameEditor({
                   label="Text opacity"
                   value={frameSettings.text_opacity}
                   onChange={(v) => updateSetting("text_opacity", v)}
-                  options={OPACITY_OPTIONS}
+                  options={OPACITY_PERCENT_OPTIONS}
                   min={0}
                   max={1}
+                  unit="%"
+                  displayAsPercentage={true}
                 />
 
                 <NumberSelect
@@ -1133,9 +1137,11 @@ export function FrameEditor({
                   label="Border opacity"
                   value={frameSettings.border_opacity}
                   onChange={(v) => updateSetting("border_opacity", v)}
-                  options={OPACITY_OPTIONS}
+                  options={OPACITY_PERCENT_OPTIONS}
                   min={0}
                   max={1}
+                  unit="%"
+                  displayAsPercentage={true}
                 />
               </div>
 
